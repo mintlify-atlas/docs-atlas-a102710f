@@ -1,7 +1,7 @@
 ---
-title: "REST API Reference Overview"
+title: "AI Ticket Support System REST API Reference Overview"
 sidebarTitle: "Overview"
-description: "Overview of the AI Ticket Support System REST API. All endpoints are under /api/v1, return JSON, and run on port 3001 by default."
+description: "Complete REST API reference for the AI Ticket Support System. All ticket endpoints live under /api/v1, return JSON, and run on port 3001 by default."
 ---
 
 The AI Ticket Support System exposes a REST API that powers ticket creation, classification, retrieval, and management. When a ticket is submitted, the API synchronously runs GPT-4o-mini classification, hybrid RAG search against the knowledge base, and GraphRAG entity-context retrieval before persisting the result. Every response body is JSON.
@@ -40,14 +40,14 @@ Every ticket endpoint returns objects that conform to the following TypeScript i
 
 ```typescript
 interface Ticket {
-  id: number;                           // Auto-incremented primary key
+  id?: number;                           // Auto-incremented primary key
   user_description: string;             // Original user problem description
-  category: string | null;             // AI-assigned: Billing, Technical, Shipping, Returns, Account, Other
-  ai_suggested_response: string | null; // AI-generated response with RAG context
-  confidence_score: number | null;      // 0.0–1.0 AI confidence; ≥0.7 = auto-resolved
-  status: string;                       // ai_resolved | pending_agent | closed
-  created_at: string;                   // ISO 8601 timestamp
-  updated_at: string;                   // ISO 8601 timestamp
+  category?: string;                    // AI-assigned: Billing, Technical, Shipping, Returns, Account, Other
+  ai_suggested_response?: string;       // AI-generated response with RAG context
+  confidence_score?: number;            // 0.0–1.0 AI confidence; ≥0.7 = auto-resolved
+  status: 'ai_resolved' | 'pending_agent' | 'closed'; // Ticket lifecycle status
+  created_at?: Date;                    // Timestamp set on creation
+  updated_at?: Date;                    // Timestamp updated on every write
 }
 ```
 

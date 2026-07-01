@@ -1,7 +1,7 @@
 ---
-title: "System Architecture of AI Ticket Support"
+title: "AI Ticket Support System: Architecture and Data Flow"
 sidebarTitle: "Architecture"
-description: "Overview of the AI Ticket Support System's layered architecture: React frontend, Express backend, PostgreSQL/pgvector database, Redis queue, and OpenAI API."
+description: "Explore the AI Ticket Support System's layered architecture: React frontend, Express API, PostgreSQL/pgvector, Redis/BullMQ queue, and OpenAI API."
 ---
 
 The AI Ticket Support System is built as a full-stack application with clearly separated concerns across five layers: a React frontend served by nginx, a Node.js/Express API backend, a PostgreSQL database with the pgvector extension, a Redis-backed job queue for asynchronous processing, and the OpenAI API for all language model and embedding calls. Each layer is containerized and orchestrated via Docker Compose for local development, with a straightforward path to cloud deployment on AWS ECS or similar container platforms.
@@ -9,16 +9,16 @@ The AI Ticket Support System is built as a full-stack application with clearly s
 ## Component overview
 
 <CardGroup cols={2}>
-  <Card title="Frontend" icon="browser">
+  <Card title="Frontend" icon="browser" href="/frontend/user-submit">
     Built with **React** and **TypeScript**, styled with **TailwindCSS**, and served in production by an **nginx** container on port 80. Includes the ticket submission form, admin dashboard, RAG visualizer, and knowledge base manager.
   </Card>
-  <Card title="Backend API" icon="server">
+  <Card title="Backend API" icon="server" href="/api/overview">
     **Express 4** on **Node.js 18+** written entirely in **TypeScript**. Exposes a versioned REST API under `/api/v1/`. Manages the full ticket lifecycle, orchestrates the AI pipeline, and owns all database access through **Prisma 5**.
   </Card>
-  <Card title="Database" icon="database">
+  <Card title="Database" icon="database" href="/configuration/database">
     **PostgreSQL 16** using the `pgvector/pgvector:pg16` image. Stores tickets, knowledge base articles, users, and GraphRAG entities. The **pgvector** extension enables native cosine-distance vector search without a separate vector database.
   </Card>
-  <Card title="Queue" icon="list-check">
+  <Card title="Queue" icon="list-check" href="/configuration/redis">
     **Redis 7** (Alpine) acts as the message broker. **BullMQ 5** manages named job queues with retry logic and exponential backoff. Used exclusively for async entity extraction, keeping ticket creation non-blocking.
   </Card>
 </CardGroup>

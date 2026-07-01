@@ -1,7 +1,7 @@
 ---
-title: "PostgreSQL and pgvector Database Setup"
+title: "PostgreSQL and pgvector Database Configuration Guide"
 sidebarTitle: "Database"
-description: "Configure PostgreSQL with the pgvector extension for the AI Ticket Support System. Covers connection setup, Prisma migrations, and the full database schema."
+description: "Configure PostgreSQL with the pgvector extension for the AI Ticket Support System. Covers Prisma migrations, models, and the full database schema."
 ---
 
 The AI Ticket Support System uses **PostgreSQL** as its primary data store, managed through **Prisma ORM**. The database holds support tickets, knowledge base articles, extracted entities, entity relationships, and user accounts. It also serves as the vector store for hybrid RAG retrieval — semantic similarity search is performed directly in Postgres using the **pgvector** extension, which eliminates the need for a separate vector database.

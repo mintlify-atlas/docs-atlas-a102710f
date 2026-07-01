@@ -1,7 +1,7 @@
 ---
-title: "Hybrid RAG Search with pgvector"
+title: "Knowledge Base RAG Search with pgvector Hybrid Scoring"
 sidebarTitle: "RAG Search"
-description: "The hybrid scoring algorithm combines 80% vector similarity with 20% recency decay and article importance weights to retrieve the most relevant knowledge base articles."
+description: "Hybrid scoring blends 80% vector similarity with 20% recency decay and importance weights to retrieve the most relevant knowledge base articles."
 ---
 
 The RAG (Retrieval-Augmented Generation) layer enriches every AI response with content from the knowledge base. Rather than relying on pure semantic similarity, the system uses a **hybrid scoring algorithm** that balances how relevant an article is to the query, how recently it was added, and a manually configurable importance weight — so that critical support articles consistently surface above older or lower-priority content.
@@ -39,13 +39,13 @@ The three components are:
   </Accordion>
 
   <Accordion title="Importance Weight">
-    A manual float multiplier stored per article in the database. It defaults to `1.0` but can be set anywhere in the range `0.0–2.0`. The importance weight is applied to the entire recency contribution:
+    A manual float multiplier stored per article in the database. It defaults to `1.0`. The importance weight is applied to the entire recency contribution:
 
     ```typescript
     return (vectorSimilarity * 0.8) + (recencyScore * 0.2) * importance;
     ```
 
-    Set critical articles to `importance >= 1.5` to ensure they rank above semantically similar but lower-priority articles, regardless of age.
+    Set critical articles to a higher importance value (for example, `1.8`) to ensure they rank above semantically similar but lower-priority articles, regardless of age.
   </Accordion>
 </AccordionGroup>
 

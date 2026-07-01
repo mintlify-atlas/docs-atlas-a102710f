@@ -1,7 +1,7 @@
 ---
-title: "Redis Queue Configuration for Background Jobs"
+title: "Redis and BullMQ Background Queue Configuration Guide"
 sidebarTitle: "Redis"
-description: "Configure Redis and BullMQ for the AI Ticket Support System's async entity extraction worker. Covers connection setup, queue behavior, and worker management."
+description: "Configure Redis and BullMQ for the AI Ticket Support System entity extraction worker. Covers connection setup, queue behavior, and worker management."
 ---
 
 The AI Ticket Support System uses **Redis** as the message broker for **BullMQ**, Node.js's production-grade job queue library. When a support ticket is created, the HTTP handler immediately returns a response to the caller and then enqueues an asynchronous job for GraphRAG entity extraction. This keeps ticket creation fast and decouples the heavier NLP work — entity identification, embedding generation, and knowledge graph updates — from the critical request path.
@@ -26,7 +26,7 @@ The `docker-compose.yml` file already declares a `redis` service using the `redi
 
 ## Queue: entity-extraction
 
-When a ticket is successfully persisted to the database, the ticket controller adds a job to the `entity-extraction` BullMQ queue with the following payload:
+When a ticket is successfully persisted to the database, the ticket controller adds a job named `extract-entities` to the `entity-extraction` BullMQ queue with the following payload:
 
 ```typescript
 {
@@ -35,7 +35,7 @@ When a ticket is successfully persisted to the database, the ticket controller a
 }
 ```
 
-The job is named `extract-entities`. BullMQ serialises the payload to JSON and stores it in Redis until the worker picks it up. Because the job is enqueued after the HTTP response has already been sent, the caller never waits for entity extraction to complete.
+BullMQ serialises the payload to JSON and stores it in Redis until the worker picks it up. Because the job is enqueued after the HTTP response has already been sent, the caller never waits for entity extraction to complete.
 
 ## Worker
 
@@ -48,7 +48,7 @@ cd backend
 npm run worker
 ```
 
-The worker registers a BullMQ `Worker` instance that listens on the `entity-extraction` queue. For each `extract-entities` job it receives, it:
+The worker registers a BullMQ `Worker` instance that listens on the `entity-extraction` queue with a concurrency of 5. For each `extract-entities` job it receives, it:
 
 1. Calls the OpenAI API to identify named entities in the ticket text.
 2. Generates a `text-embedding-3-small` vector for each entity.
@@ -93,7 +93,7 @@ See [Environment Variables](/configuration/environment) for full details on each
 
 ## Fault tolerance
 
-Redis is treated as a **non-critical dependency** for the core ticket workflow. If the Redis connection is unavailable at the moment a ticket is created, the `addJob` call in the controller is wrapped in a `try/catch` block. The exception is silently swallowed — the ticket creation response is unaffected and the HTTP `201` status is still returned to the caller. A warning is logged to the server console so the failure is observable without disrupting the user experience.
+Redis is treated as a **non-critical dependency** for the core ticket workflow. If the Redis connection is unavailable at the moment a ticket is created, the `entityQueue.add` call in the controller is wrapped in a `try/catch` block. The error is logged to the server console and the ticket creation response is unaffected — the HTTP `201` status is still returned to the caller.
 
 This design means:
 

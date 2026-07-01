@@ -1,7 +1,7 @@
 ---
-title: "AI Classification with GPT-4o-mini"
+title: "Automated AI Ticket Classification with GPT-4o-mini"
 sidebarTitle: "AI Classification"
-description: "How the system uses GPT-4o-mini with structured JSON output and few-shot examples to classify tickets and generate support responses with confidence scores."
+description: "How the system uses GPT-4o-mini with structured JSON output to classify tickets and generate support responses with confidence scores."
 ---
 
 The classification engine is the first service called on every new ticket. It uses OpenAI's `gpt-4o-mini` model to read the raw `user_description` and return a structured JSON payload containing the ticket category, a suggested customer-facing response, and a numeric confidence score. That score then gates whether the ticket is auto-resolved or routed to a human agent.

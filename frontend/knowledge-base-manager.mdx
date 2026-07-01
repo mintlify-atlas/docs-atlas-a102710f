@@ -1,7 +1,7 @@
 ---
-title: "Knowledge Base Manager: Article Importance Tuning"
+title: "Knowledge Base Manager: Tune Article Importance Weights"
 sidebarTitle: "Knowledge Base"
-description: "The Knowledge Base Manager lets agents view and adjust article importance weights that control how the hybrid RAG search ranks retrieved knowledge base articles."
+description: "Manage and tune knowledge base article importance weights that control how the hybrid RAG search ranks articles when the AI generates support responses."
 ---
 
 The Knowledge Base Manager is the administrative interface for tuning how the hybrid RAG pipeline retrieves and ranks support articles. Rather than treating all knowledge base articles equally, the system assigns each article an **importance weight** — a numeric multiplier that influences how prominently an article surfaces when the AI is searching for context to answer a support ticket. Agents can view all articles, inspect their current importance values, and update them directly in the UI.
@@ -98,15 +98,13 @@ Adjusting an article's importance weight is done inline on the Knowledge Base Ma
 
 ## Default articles
 
-The system is preloaded with 5 knowledge base articles that cover the most common support categories. These are initialized by the RAG service on startup:
+The system is preloaded with 3 knowledge base articles that cover the most common support categories. These are loaded into local state when the Knowledge Base Manager page mounts:
 
 | # | Title | Category | Default Importance |
 |---|---|---|---|
 | 1 | How to request a refund | Returns | 1.0 |
 | 2 | Payment methods accepted | Billing | 1.0 |
 | 3 | Track your order | Shipping | 0.8 |
-| 4 | Reset your password | Account | 1.0 |
-| 5 | Website not loading | Technical | 1.0 |
 
 These articles form the base retrieval set. For new deployments, start by reviewing whether any of these should be elevated to `importance: 1.5` based on your support ticket volume by category.
 

@@ -1,7 +1,7 @@
 ---
-title: "RAG Retrieval Visualizer for Debugging AI Context"
+title: "RAG Retrieval Visualizer: Debug AI Context Retrieval"
 sidebarTitle: "RAG Visualizer"
-description: "The RAG Visualizer shows which knowledge base articles and graph entities the AI used when processing a query, with similarity scores and processing time metrics."
+description: "Debug AI retrieval by visualizing which knowledge base articles and graph entities the system uses for a query, with similarity scores and timing metrics."
 ---
 
 The RAG Visualizer is a developer and agent debugging tool that makes the retrieval process transparent. When the AI generates a response to a support ticket, it first retrieves relevant knowledge base articles using hybrid RAG (vector similarity + recency scoring) and pulls relational context from the GraphRAG entity graph. The Visualizer lets you run any query string through this same retrieval pipeline and see exactly which articles were returned, what their similarity and hybrid scores were, which graph entities were involved, and how long the whole process took.

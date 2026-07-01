@@ -1,7 +1,7 @@
 ---
 title: "POST /api/v1/tickets — Create and Classify a Ticket"
 sidebarTitle: "Create Ticket"
-description: "POST /api/v1/tickets creates a support ticket and immediately runs AI classification, hybrid RAG search, and GraphRAG context retrieval. Returns the created ticket."
+description: "POST /api/v1/tickets creates a support ticket, runs AI classification and RAG search, and returns the persisted ticket object with HTTP 201 Created."
 ---
 
 Submitting a ticket triggers the full AI pipeline **synchronously**: GPT-4o-mini classifies the problem and generates a suggested response, a hybrid RAG search retrieves the most relevant knowledge base articles, and GraphRAG pulls in related graph entities to enrich the response. The assembled ticket is persisted to PostgreSQL and returned in the `201` response. After the response is sent, entity extraction for GraphRAG is queued as a background job and does not block the caller.

@@ -1,7 +1,7 @@
 ---
-title: "GET /api/v1/tickets — List All Support Tickets"
+title: "GET /api/v1/tickets — List All Support Tickets by Status"
 sidebarTitle: "List Tickets"
-description: "GET /api/v1/tickets returns all tickets sorted by creation date descending. Filter by status using the status query parameter."
+description: "GET /api/v1/tickets returns all support tickets sorted by created_at descending. Pass the status query param to filter by ticket lifecycle stage."
 ---
 
 Retrieve a list of all support tickets stored in the database. Results are always ordered by `created_at` **descending** so the most recently created tickets appear first. Use the optional `status` query parameter to scope the results to a specific lifecycle stage — useful for building agent queues or dashboard views.
@@ -37,37 +37,40 @@ curl "http://localhost:3001/api/v1/tickets?status=ai_resolved"
 
 ## Response (200 OK)
 
-Returns a JSON **array** of Ticket objects. The array is empty (`[]`) when no tickets match the filter. Results are sorted by `created_at` descending — newest tickets appear first.
+Returns a JSON **array** of Ticket objects directly (not wrapped in an object). The array is empty (`[]`) when no tickets match the filter. Results are sorted by `created_at` descending — newest tickets appear first.
 
-<ResponseField name="tickets" type="Ticket[]">
-  Array of ticket objects. Each element contains the same fields as the single-ticket response from `GET /api/v1/tickets/:id`.
+Each element of the array contains the following fields:
 
-  <Expandable title="Ticket object fields">
-    <ResponseField name="id" type="number">
-      Auto-incremented ticket ID.
-    </ResponseField>
-    <ResponseField name="user_description" type="string">
-      The original customer problem description.
-    </ResponseField>
-    <ResponseField name="category" type="string | null">
-      AI-assigned category: `Billing`, `Technical`, `Shipping`, `Returns`, `Account`, or `Other`.
-    </ResponseField>
-    <ResponseField name="ai_suggested_response" type="string | null">
-      AI-generated response enriched with knowledge base articles and graph entity context.
-    </ResponseField>
-    <ResponseField name="confidence_score" type="number | null">
-      AI confidence score between `0.0` and `1.0`.
-    </ResponseField>
-    <ResponseField name="status" type="string">
-      Current ticket status: `ai_resolved`, `pending_agent`, or `closed`.
-    </ResponseField>
-    <ResponseField name="created_at" type="string">
-      ISO 8601 UTC creation timestamp.
-    </ResponseField>
-    <ResponseField name="updated_at" type="string">
-      ISO 8601 UTC last-updated timestamp.
-    </ResponseField>
-  </Expandable>
+<ResponseField name="id" type="number">
+  Auto-incremented ticket ID.
+</ResponseField>
+
+<ResponseField name="user_description" type="string">
+  The original customer problem description.
+</ResponseField>
+
+<ResponseField name="category" type="string | null">
+  AI-assigned category: `Billing`, `Technical`, `Shipping`, `Returns`, `Account`, or `Other`.
+</ResponseField>
+
+<ResponseField name="ai_suggested_response" type="string | null">
+  AI-generated response enriched with knowledge base articles and graph entity context.
+</ResponseField>
+
+<ResponseField name="confidence_score" type="number | null">
+  AI confidence score between `0.0` and `1.0`.
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Current ticket status: `ai_resolved`, `pending_agent`, or `closed`.
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  ISO 8601 UTC creation timestamp.
+</ResponseField>
+
+<ResponseField name="updated_at" type="string">
+  ISO 8601 UTC last-updated timestamp.
 </ResponseField>
 
 ### Example Response
