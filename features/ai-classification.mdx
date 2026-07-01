@@ -1,0 +1,167 @@
+---
+title: "AI Classification with GPT-4o-mini"
+sidebarTitle: "AI Classification"
+description: "How the system uses GPT-4o-mini with structured JSON output and few-shot examples to classify tickets and generate support responses with confidence scores."
+---
+
+The classification engine is the first service called on every new ticket. It uses OpenAI's `gpt-4o-mini` model to read the raw `user_description` and return a structured JSON payload containing the ticket category, a suggested customer-facing response, and a numeric confidence score. That score then gates whether the ticket is auto-resolved or routed to a human agent.
+
+<Note>
+  The `OPENAI_API_KEY` environment variable must be set before starting the backend. Without it the OpenAI client will fail to initialise and all classification calls will fall back to the default error response.
+</Note>
+
+## Classification categories
+
+GPT-4o-mini classifies every ticket into exactly one of the following six categories. The category is stored on the ticket record and used to filter tickets in the agent dashboard.
+
+- **Billing** — payment issues, invoices, charges
+- **Technical** — bugs, errors, platform behaviour
+- **Shipping** — delivery status, tracking, logistics
+- **Returns** — refund requests, product returns
+- **Account** — login, passwords, profile settings
+- **Other** — anything that doesn't fit the above
+
+## How classification works
+
+`classifyTicket()` in `src/services/aiService.ts` makes a single `chat.completions.create` call with the following model parameters:
+
+| Parameter | Value | Reason |
+|---|---|---|
+| `model` | `gpt-4o-mini` | Fast and cost-efficient for classification tasks |
+| `temperature` | `0.3` | Low temperature for consistent, deterministic outputs |
+| `response_format` | `{ type: 'json_object' }` | Enforces structured JSON output every time |
+
+The system prompt instructs the model to act as an e-commerce support assistant and respond with the three-field JSON schema shown below:
+
+```typescript
+// Expected JSON output from GPT-4o-mini
+{
+  category: string;          // one of: Billing, Technical, Shipping, Returns, Account, Other
+  ai_suggested_response: string;  // customer-facing support response
+  confidence_score: number;  // float between 0.0 and 1.0
+}
+```
+
+The full model call from `aiService.ts`:
+
+```typescript
+const response = await openai.chat.completions.create({
+  model: 'gpt-4o-mini',
+  messages: [
+    {
+      role: 'system',
+      content: `You are a customer support assistant for an e-commerce platform.
+      Classify the user's problem into one of these categories: Billing, Technical, Shipping, Returns, Account, Other.
+      Provide a helpful response and a confidence score (0.0 to 1.0).
+
+      Respond in JSON format with this structure:
+      {
+        "category": "category_name",
+        "ai_suggested_response": "helpful_response",
+        "confidence_score": 0.0-1.0
+      }`
+    },
+    {
+      role: 'user',
+      content: description
+    }
+  ],
+  temperature: 0.3,
+  response_format: { type: 'json_object' }
+});
+```
+
+## Confidence scoring
+
+The `confidence_score` is the model's self-reported certainty that the classification and suggested response are correct. It drives automated routing:
+
+- **`confidence_score >= 0.7`** → ticket status is set to `ai_resolved`. The AI response is considered reliable and no human review is required by default.
+- **`confidence_score < 0.7`** → ticket status is set to `pending_agent`. The ticket is queued for a human support agent to review.
+
+After parsing the JSON response, the system validates that the score falls within the expected range. Any out-of-range value is clamped to a neutral default:
+
+```typescript
+// Validate confidence score
+if (aiResponse.confidence_score < 0 || aiResponse.confidence_score > 1) {
+  aiResponse.confidence_score = 0.5;
+}
+```
+
+A clamped score of `0.5` always routes the ticket to `pending_agent`, making it the safe default when the model returns an unexpected value.
+
+## Embedding generation
+
+`generateEmbedding()` converts any text string into a dense vector representation suitable for pgvector similarity search. It uses OpenAI's `text-embedding-3-small` model, which produces a **1536-dimension** vector.
+
+```typescript
+export const generateEmbedding = async (text: string): Promise<number[]> => {
+  const response = await openai.embeddings.create({
+    model: 'text-embedding-3-small',
+    input: text,
+  });
+  return response.data[0].embedding;
+};
+```
+
+This function is called in three places:
+- **RAG search** — to embed the incoming ticket description before running pgvector cosine similarity against knowledge base articles.
+- **Entity storage** — to embed each extracted entity name before storing it in the `entities` table.
+- **Entity search** — to embed a ticket query before finding the nearest entities in the knowledge graph.
+
+## Entity extraction
+
+`extractEntities()` sends the ticket text to GPT-4o-mini with a dedicated system prompt instructing it to identify named entities. It returns an array of `ExtractedEntity` objects, each with a `name` and a `type` from the fixed taxonomy below.
+
+**Supported entity types:** `Person`, `Place`, `Concept`, `Product`, `Organization`
+
+```typescript
+export interface ExtractedEntity {
+  name: string;
+  type: string; // Person | Place | Concept | Product | Organization
+}
+```
+
+The model call uses the same low-temperature, `json_object` response format as classification:
+
+```typescript
+const response = await openai.chat.completions.create({
+  model: 'gpt-4o-mini',
+  messages: [
+    {
+      role: 'system',
+      content: `Extract entities from the text. Entity types: Person, Place, Concept, Product, Organization.
+      Return only the entity name and type in JSON format.
+
+      Respond in JSON format with this structure:
+      {
+        "entities": [
+          {"name": "entity_name", "type": "entity_type"}
+        ]
+      }`
+    },
+    {
+      role: 'user',
+      content: text
+    }
+  ],
+  temperature: 0.3,
+  response_format: { type: 'json_object' }
+});
+```
+
+Entity extraction runs **asynchronously** after ticket creation via a BullMQ job — it never blocks the response to the API caller. See [GraphRAG](/features/graphrag) for details on how extracted entities are stored and traversed.
+
+## Fallback behavior
+
+If the OpenAI API call fails for any reason (network error, rate limit, invalid API key, etc.), `classifyTicket()` catches the error and returns a safe fallback object instead of propagating the exception:
+
+```typescript
+// Fallback response on API failure
+return {
+  category: 'Other',
+  ai_suggested_response: 'Your ticket has been received and will be reviewed by our support team.',
+  confidence_score: 0.3,
+};
+```
+
+A fallback `confidence_score` of `0.3` is always below the 0.7 threshold, so the ticket will be routed to `pending_agent`. This ensures a human agent reviews any ticket the AI could not classify — no ticket is silently dropped.

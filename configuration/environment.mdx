@@ -1,0 +1,68 @@
+---
+title: "Environment Variables Reference"
+sidebarTitle: "Environment"
+description: "All environment variables for the AI Ticket Support System backend: database URL, OpenAI key, Redis host/port, and server port configuration."
+---
+
+The AI Ticket Support System backend is configured entirely through environment variables. Copy the `.env.example` file in the `backend/` directory to `.env` and fill in the required values before starting the server. All variables are loaded at runtime via `dotenv`, so no rebuild is needed when changing configuration.
+
+## .env.example
+
+The repository ships with a ready-to-use template covering every supported variable:
+
+```bash
+PORT=3001
+NODE_ENV=development
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/ticket_system
+OPENAI_API_KEY=your_openai_api_key_here
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=
+```
+
+<Warning>
+  Never commit your `.env` file to version control. It contains secrets such as your OpenAI API key and database credentials. Add `.env` to `.gitignore` and distribute credentials through a secrets manager or your deployment platform's environment variable UI.
+</Warning>
+
+## Variable reference
+
+<ParamField path="PORT" type="number" default="3001">
+  TCP port the Express server listens on. Change this if port `3001` is already in use on your host, and remember to update any reverse-proxy or firewall rules accordingly.
+</ParamField>
+
+<ParamField path="NODE_ENV" type="string" default="development">
+  Node.js environment mode. Set to `production` for production deployments — this disables verbose Prisma query logging and enables any production-specific optimisations in the application. Accepted values are `development`, `test`, and `production`.
+</ParamField>
+
+<ParamField path="DATABASE_URL" type="string" required>
+  PostgreSQL connection string in the format `postgresql://user:password@host:port/dbname`. This value is consumed directly by Prisma Client and must point to a PostgreSQL instance that has the **pgvector** extension available. See [Database Setup](/configuration/database) for details on enabling the extension.
+
+  ```text
+  postgresql://postgres:postgres@localhost:5432/ticket_system
+  ```
+</ParamField>
+
+<ParamField path="OPENAI_API_KEY" type="string" required>
+  Secret API key used to authenticate all calls to the OpenAI platform. The backend uses this key for two distinct purposes:
+
+  - **GPT-4o-mini** — ticket classification, category prediction, and AI-suggested response generation.
+  - **text-embedding-3-small** — generating 1 536-dimension embeddings for knowledge base articles and entities used in hybrid RAG and GraphRAG retrieval.
+
+  Obtain a key from [https://platform.openai.com/api-keys](https://platform.openai.com/api-keys). Ensure the key has access to both the `chat/completions` and `embeddings` endpoints.
+</ParamField>
+
+<ParamField path="REDIS_HOST" type="string" default="localhost">
+  Hostname or IP address of the Redis server used by BullMQ to manage the `entity-extraction` job queue. When running via Docker Compose this value is automatically set to `redis` (the service name) so containers can communicate over the internal Docker network.
+</ParamField>
+
+<ParamField path="REDIS_PORT" type="number" default="6379">
+  Port that the Redis server is listening on. Matches the Redis default; only change this if your Redis instance is bound to a non-standard port.
+</ParamField>
+
+<ParamField path="REDIS_PASSWORD" type="string">
+  Password for Redis authentication. Leave this value empty (or omit the variable entirely) for Redis instances that do not require authentication — the default development and Docker Compose setups use no password. Set this to your Redis `requirepass` value in password-protected environments.
+</ParamField>
+
+<Note>
+  When running the full stack with Docker Compose, all variables are forwarded from a single root-level `.env` file to the backend container automatically via the `environment:` block in `docker-compose.yml`. You only need to set `OPENAI_API_KEY` in that file — the remaining variables are pre-configured with sensible defaults for the Compose network.
+</Note>

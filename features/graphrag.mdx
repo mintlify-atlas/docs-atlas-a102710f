@@ -1,0 +1,179 @@
+---
+title: "GraphRAG: Knowledge Graph for Contextual AI"
+sidebarTitle: "GraphRAG"
+description: "GraphRAG extracts entities from tickets, builds a knowledge graph, and traverses entity relationships via BFS to provide richer context to GPT-4o-mini."
+---
+
+Plain vector search answers the question *"which articles are most similar to this ticket?"* but it cannot answer *"what other concepts, products, or people are closely connected to what the customer is asking about?"* GraphRAG fills that gap by maintaining a knowledge graph of named entities extracted from every ticket and traversing the graph at query time to surface relationship context that flat embeddings cannot express.
+
+## Entity types
+
+The system recognises five entity types. Every entity extracted by GPT-4o-mini is tagged with one of these:
+
+| Type | Examples |
+|---|---|
+| **Person** | customer names, agent names, account holders |
+| **Place** | shipping addresses, warehouse locations, country names |
+| **Concept** | refund policy, subscription plan, two-factor authentication |
+| **Product** | SKU names, software features, hardware models |
+| **Organization** | payment processors, courier companies, partner brands |
+
+## How GraphRAG works
+
+<Steps>
+  <Step title="Async job triggered after ticket creation">
+    After a ticket is saved and the HTTP response is returned to the caller, `ticketController.ts` adds a BullMQ job to the `entity-extraction` Redis queue with the `ticketId` and raw `user_description` text.
+
+    ```typescript
+    await entityQueue.add('extract-entities', {
+      ticketId: ticket.id,
+      text: user_description,
+    });
+    ```
+  </Step>
+
+  <Step title="Entity extraction via GPT-4o-mini">
+    `entityExtractionWorker` picks up the job (concurrency: 5) and calls `extractEntities()`, which sends the ticket text to GPT-4o-mini with a structured prompt requesting JSON output of named entities.
+
+    ```typescript
+    const entities = await extractEntities(text);
+    // e.g. [{ name: 'PayPal', type: 'Organization' }, { name: 'Pro Plan', type: 'Product' }]
+    ```
+  </Step>
+
+  <Step title="Entities stored with vector embeddings">
+    For each extracted entity that doesn't already exist in the database, the worker generates a 1536-dimension embedding of the entity **name** using `text-embedding-3-small` and stores the entity in the `entities` table via raw SQL.
+
+    ```typescript
+    const embedding = await generateEmbedding(entityData.name);
+    await prisma.$queryRaw`
+      INSERT INTO entities (name, type, embedding)
+      VALUES (${entityData.name}, ${entityData.type}, ${embedding}::vector)
+      RETURNING id, name, type, created_at
+    `;
+    ```
+  </Step>
+
+  <Step title="Vector search finds similar entities">
+    When the next ticket arrives, `getGraphContextForTicket()` calls `findSimilarEntities()`, which embeds the new ticket description and queries pgvector for the top 3 nearest entity nodes:
+
+    ```typescript
+    const similarEntities = await findSimilarEntities(ticketDescription, 3);
+    ```
+
+    ```sql
+    SELECT id, name, type, embedding
+    FROM entities
+    WHERE embedding IS NOT NULL
+    ORDER BY embedding <=> query_embedding::vector
+    LIMIT 5
+    ```
+  </Step>
+
+  <Step title="BFS graph traversal from the closest entity">
+    `traverseGraph()` is called with the **most similar** entity as the starting node. BFS explores both outgoing and incoming `EntityRelation` edges up to `maxDepth=2` and collects up to `maxNodes=10` nodes.
+
+    ```typescript
+    const graphContext = await traverseGraph(similarEntities[0].name, 2, 10);
+    ```
+  </Step>
+
+  <Step title="Entity names injected into the AI prompt">
+    Back in `ticketController.ts`, the `relevantEntities` array from the `GraphContext` is appended to the AI-suggested response before the ticket is stored:
+
+    ```typescript
+    if (graphContext.relevantEntities.length > 0) {
+      enhancedResponse += `\n\nRelated entities: ${graphContext.relevantEntities.join(', ')}`;
+    }
+    ```
+  </Step>
+</Steps>
+
+## Graph traversal
+
+`traverseGraph()` implements a **breadth-first search** starting from a named entity and expanding through both directions of every `EntityRelation` edge.
+
+```typescript
+export const traverseGraph = async (
+  startEntityName: string,
+  maxDepth: number = 2,
+  maxNodes: number = 10
+): Promise<GraphContext>
+```
+
+**Algorithm details:**
+
+- The starting entity is looked up by **exact name match** in the `entities` table.
+- A `visited` set prevents cycles — each entity ID is only processed once.
+- For each dequeued node, the worker queries **both** `fromId = entityId` (outgoing) and `toId = entityId` (incoming) relation rows via Prisma.
+- The BFS stops early when either the queue is empty, `depth >= maxDepth`, or `nodes.length >= maxNodes`.
+- The function returns a `GraphContext` containing the full node list, the edge list, and `relevantEntities` — a flat array of every node's name, ready to concatenate into a prompt.
+
+If the starting entity name is not found in the database, `traverseGraph` returns an empty context `{ nodes: [], edges: [], relevantEntities: [] }` without throwing.
+
+<Note>
+  GraphRAG context is appended to the AI response as `"Related entities: ..."` only when at least one entity is found. If the entities table is empty (e.g. on a fresh install before any entity extraction jobs have run), this section is silently omitted from the response.
+</Note>
+
+## Database schema
+
+The knowledge graph is stored in two tables defined in `prisma/schema.prisma`.
+
+```prisma
+model Entity {
+  id         Int      @id @default(autoincrement())
+  name       String
+  type       String   // Person, Place, Concept, Product, Organization
+  embedding  Unsupported("vector(1536)")?
+  created_at DateTime @default(now())
+
+  fromRelations EntityRelation[] @relation("FromRelations")
+  toRelations   EntityRelation[] @relation("ToRelations")
+
+  @@map("entities")
+}
+
+model EntityRelation {
+  id           Int    @id @default(autoincrement())
+  fromId       Int
+  toId         Int
+  relationType String
+  strength     Float  @default(1.0)
+  from         Entity @relation("FromRelations", fields: [fromId], references: [id])
+  to           Entity @relation("ToRelations", fields: [toId], references: [id])
+
+  @@map("entity_relations")
+}
+```
+
+Relationships created by the entity extraction worker are typed as `related_to` with a `strength` of `0.5`. The `strength` field (range `0.0–1.0`, default `1.0`) is available for more sophisticated traversal weighting in future iterations.
+
+## GraphContext interface
+
+The following interfaces from `src/services/graphRagService.ts` describe all data returned by `traverseGraph()` and `getGraphContextForTicket()`.
+
+```typescript
+interface GraphContext {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  relevantEntities: string[]; // flat array of all node names
+}
+
+interface GraphNode {
+  id: number;
+  name: string;
+  type: string;
+  embedding?: number[];
+}
+
+interface GraphEdge {
+  from: number;        // fromId (Entity.id)
+  to: number;          // toId (Entity.id)
+  relationType: string;
+  strength: number;
+}
+```
+
+<Tip>
+  The RAG Visualizer UI shows the graph context in real-time for any query. Navigate to **Tools → RAG Visualizer**, enter a search term, and the UI renders the entity graph with nodes coloured by type and edge thickness proportional to `strength`.
+</Tip>

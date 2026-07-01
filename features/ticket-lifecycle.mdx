@@ -1,0 +1,177 @@
+---
+title: "Ticket Lifecycle: From Submission to Resolution"
+sidebarTitle: "Ticket Lifecycle"
+description: "How a ticket moves through the AI Ticket Support System: submission, AI classification, confidence-based routing, and agent review or auto-resolution."
+---
+
+Every support ticket in the AI Ticket Support System travels through a defined pipeline: from a raw user description to a fully classified, context-enriched response — either automatically resolved by the AI or queued for a human agent. Understanding this lifecycle helps you configure thresholds, monitor ticket health, and integrate with the system's REST API.
+
+## Ticket states
+
+A ticket exists in one of three mutually exclusive states at any point in time. State transitions are driven by the AI confidence score on creation and by agent actions afterward.
+
+| Status | Meaning | Next Actions |
+|---|---|---|
+| `pending_agent` | AI confidence score is below 0.7 — human review is required | Agent reviews, responds, and closes; or re-routes |
+| `ai_resolved` | AI confidence score is 0.7 or above — the system auto-resolved the ticket | Agent may reopen or reassign; otherwise left resolved |
+| `closed` | Ticket has been manually closed by an agent | Terminal state; no further actions expected |
+
+<Tip>
+  Agents can manually reassign any `ai_resolved` ticket back to `pending_agent` via `PATCH /api/v1/tickets/:id` — for example, when a customer follows up and the auto-response turns out to be insufficient.
+</Tip>
+
+## Submission flow
+
+When a `POST /api/v1/tickets` request arrives, the controller orchestrates several services before a ticket record is persisted. Each step below maps directly to code in `ticketController.ts`.
+
+<Steps>
+  <Step title="Receive the user description">
+    `POST /api/v1/tickets` accepts a JSON body with a `user_description` field. The controller validates that the field is present; missing descriptions return a `400 Bad Request` immediately.
+
+    ```typescript
+    const { user_description }: CreateTicketRequest = req.body;
+    ```
+  </Step>
+
+  <Step title="AI classification">
+    `classifyTicket(user_description)` calls GPT-4o-mini and returns the ticket category, a suggested support response, and a confidence score between 0.0 and 1.0.
+
+    ```typescript
+    const aiResponse = await classifyTicket(user_description);
+    ```
+  </Step>
+
+  <Step title="Hybrid RAG search">
+    `searchKnowledgeBase(user_description)` generates a 1536-dimension embedding for the query and runs a hybrid pgvector search against the knowledge base, blending vector similarity with recency decay and article importance weights.
+
+    ```typescript
+    const relevantArticles = await searchKnowledgeBase(user_description);
+    ```
+  </Step>
+
+  <Step title="GraphRAG entity context">
+    `getGraphContextForTicket(user_description)` finds entities similar to the ticket text in the knowledge graph, then traverses the graph via BFS (depth=2, max 10 nodes) to collect a set of `relevantEntities`.
+
+    ```typescript
+    const graphContext = await getGraphContextForTicket(user_description);
+    ```
+  </Step>
+
+  <Step title="Response enhancement">
+    The raw AI response is enriched with the top knowledge base articles (title + first 100 characters of content) and any related entities discovered by GraphRAG. Both additions are appended to `ai_suggested_response` in plaintext.
+
+    ```typescript
+    let enhancedResponse = aiResponse.ai_suggested_response;
+
+    if (relevantArticles.length > 0) {
+      enhancedResponse += '\n\nRelated articles:\n';
+      relevantArticles.forEach(article => {
+        enhancedResponse += `- ${article.title}: ${article.content.substring(0, 100)}...\n`;
+      });
+    }
+
+    if (graphContext.relevantEntities.length > 0) {
+      enhancedResponse += `\n\nRelated entities: ${graphContext.relevantEntities.join(', ')}`;
+    }
+    ```
+  </Step>
+
+  <Step title="Confidence-based status assignment">
+    The confidence score from step 2 determines the initial ticket status. Scores of 0.7 or above are considered reliable enough for automatic resolution.
+
+    ```typescript
+    const status = aiResponse.confidence_score >= 0.7 ? 'ai_resolved' : 'pending_agent';
+    ```
+  </Step>
+
+  <Step title="Persist to PostgreSQL">
+    The fully assembled ticket record is written to the `tickets` table via Prisma. The `created_at` and `updated_at` timestamps are set automatically by the database.
+
+    ```typescript
+    const ticket = await prisma.ticket.create({
+      data: {
+        user_description,
+        category: aiResponse.category,
+        ai_suggested_response: enhancedResponse,
+        confidence_score: aiResponse.confidence_score,
+        status,
+      },
+    });
+    ```
+  </Step>
+
+  <Step title="Queue async entity extraction">
+    After the ticket is created and the HTTP response is returned to the caller, a BullMQ job is added to the `entity-extraction` Redis queue. The `ticketId` and original `user_description` are passed as job data for downstream processing.
+
+    ```typescript
+    await entityQueue.add('extract-entities', {
+      ticketId: ticket.id,
+      text: user_description,
+    });
+    ```
+  </Step>
+</Steps>
+
+## Async entity extraction
+
+Entity extraction runs **after** the ticket creation response has already been sent to the client. This means the initial API call remains fast regardless of how long the AI entity extraction takes.
+
+The job is processed by `entityExtractionWorker`, which:
+
+1. Calls `extractEntities()` to identify named entities (Person, Place, Concept, Product, Organization) in the ticket text via GPT-4o-mini.
+2. For each new entity, generates a 1536-dimension vector embedding and stores the entity in the `entities` PostgreSQL table.
+3. Creates `related_to` edges in `entity_relations` between every pair of entities found in the same ticket (if the relationship doesn't already exist).
+
+The BullMQ queue is configured with **3 retry attempts** and **exponential backoff** starting at 2 seconds:
+
+```typescript
+// entityQueue.ts
+export const entityQueue = new Queue('entity-extraction', {
+  connection: redis,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: {
+      type: 'exponential',
+      delay: 2000,
+    },
+  },
+});
+```
+
+The worker runs with a concurrency of **5**, meaning up to five entity extraction jobs can execute in parallel. If the queue itself fails to accept the job (e.g. Redis is unavailable), the error is caught and logged — ticket creation still succeeds.
+
+```typescript
+try {
+  await entityQueue.add('extract-entities', { ticketId: ticket.id, text: user_description });
+} catch (queueError) {
+  console.error('Failed to queue entity extraction job:', queueError);
+  // Don't fail the ticket creation if queue fails
+}
+```
+
+## TypeScript interfaces
+
+The following interfaces from `src/models/ticket.ts` define the shape of ticket data throughout the system.
+
+```typescript
+export interface Ticket {
+  id?: number;
+  user_description: string;
+  category?: string;
+  ai_suggested_response?: string;
+  confidence_score?: number;
+  status: 'ai_resolved' | 'pending_agent' | 'closed';
+  created_at?: Date;
+  updated_at?: Date;
+}
+
+export interface CreateTicketRequest {
+  user_description: string;
+}
+
+export interface UpdateTicketRequest {
+  status?: 'ai_resolved' | 'pending_agent' | 'closed';
+  category?: string;
+  ai_suggested_response?: string;
+}
+```

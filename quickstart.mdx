@@ -1,47 +1,150 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with AI Ticket Support System"
+sidebarTitle: "Quickstart"
+description: "Run the full AI Ticket Support System stack locally in minutes using Docker Compose. Requires Docker and an OpenAI API key."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+The fastest path to a running instance of the AI Ticket Support System is Docker Compose. A single command spins up PostgreSQL with pgvector, Redis, the Node.js backend, and the React frontend — fully wired together. All you need before starting is Docker Desktop and an OpenAI API key.
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+  <Step title="Clone the repository">
+    Clone the project to your local machine and navigate into the project root:
 
     ```bash
-    npm install your-package
+    git clone <repository-url>
+    cd test-pruebatec
     ```
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Set up environment variables">
+    Copy the example environment file and open it to add your credentials:
 
     ```bash
-    your-cli init
+    cp .env.example .env
     ```
+
+    The `.env.example` file contains the following defaults:
+
+    ```bash .env.example
+    PORT=3001
+    NODE_ENV=development
+    DATABASE_URL=postgresql://postgres:postgres@localhost:5432/ticket_system
+    OPENAI_API_KEY=your_openai_api_key_here
+    REDIS_HOST=localhost
+    REDIS_PORT=6379
+    REDIS_PASSWORD=
+    ```
+
+    Replace `your_openai_api_key_here` with your actual OpenAI API key. All other values work out of the box for local development with Docker Compose.
+
+    <Note>
+      `OPENAI_API_KEY` is the only value you must change. The system cannot classify or respond to tickets without a valid key.
+    </Note>
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+  <Step title="Start with Docker Compose">
+    From the project root, bring up all services:
 
     ```bash
-    your-cli start
+    docker-compose up
     ```
+
+    Docker Compose will build the backend and frontend images and start the following services:
+
+    | Service | Port | Notes |
+    |---|---|---|
+    | PostgreSQL (pgvector) | 5432 | Waits for health check before backend starts |
+    | Redis | 6379 | Waits for health check before backend starts |
+    | Backend API | 3001 | Runs `prisma generate` then `npm run dev` on startup |
+    | Frontend (nginx) | 80 | Depends on the backend service |
+
+    The backend container automatically runs `npx prisma generate && npm run dev` on startup, so database migrations are applied before the API begins accepting requests.
+
+    <Warning>
+      The database migration must complete before the backend can start accepting requests. If you see connection errors immediately after `docker-compose up`, wait a few seconds for Prisma migrations to finish applying.
+    </Warning>
+  </Step>
+
+  <Step title="Access the application">
+    Once all containers are running and healthy, open the following URLs:
+
+    | URL | Description |
+    |---|---|
+    | http://localhost | React frontend (ticket submission + admin dashboard) |
+    | http://localhost:3001 | Backend API root |
+    | http://localhost:3001/api/health | Health check endpoint |
+
+    The admin dashboard is accessible via the **Admin Dashboard** link in the frontend navigation. The **RAG Visualizer** shows real-time retrieval scores, and the **Knowledge Base** manager lets you adjust article importance weights.
   </Step>
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## Manual setup (without Docker)
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+If you prefer to run services directly on your machine, follow the steps below for each component.
+
+<Tabs>
+  <Tab title="Backend">
+    Install dependencies and run database migrations before starting the dev server:
+
+    ```bash
+    cd backend
+    npm install
+    npx prisma generate
+    npx prisma migrate dev
+    npm run dev
+    ```
+
+    The backend starts on **port 3001** by default. The entity extraction worker starts automatically because `index.ts` imports `./workers/entityExtractionWorker` directly.
+
+    <Tip>
+      You can also run the worker in isolation for debugging with `npm run worker`.
+    </Tip>
+  </Tab>
+  <Tab title="Frontend">
+    In a separate terminal, install frontend dependencies and start the development server:
+
+    ```bash
+    cd frontend
+    npm install
+    npm start
+    ```
+
+    The React development server starts on **port 3000**.
+  </Tab>
+</Tabs>
+
+You will also need a running PostgreSQL instance with the pgvector extension. The quickest way is to start it with Docker while keeping the rest of the stack running natively:
+
+```bash
+docker run -d -p 5432:5432 \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=ticket_system \
+  pgvector/pgvector:pg16
+```
+
+## Verify it works
+
+Once the stack is running, create a test ticket using `curl` to confirm the full AI pipeline is functional:
+
+```bash
+curl -X POST http://localhost:3001/api/v1/tickets \
+  -H "Content-Type: application/json" \
+  -d '{"user_description": "I cannot log into my account"}'
+```
+
+A successful response includes the AI-generated category, suggested response, confidence score, and resolved status:
+
+```json
+{
+  "id": 1,
+  "user_description": "I cannot log into my account",
+  "category": "Account",
+  "ai_suggested_response": "Try resetting your password via the login page...",
+  "confidence_score": 0.85,
+  "status": "ai_resolved",
+  "created_at": "2024-01-01T00:00:00Z"
+}
+```
+
+If the confidence score is 0.85 (≥ 0.7), the ticket is automatically marked `ai_resolved`. A score below 0.7 produces a `pending_agent` status and routes the ticket to the human queue.

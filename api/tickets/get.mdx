@@ -1,0 +1,81 @@
+---
+title: "GET /api/v1/tickets/:id — Fetch a Single Ticket"
+sidebarTitle: "Get Ticket"
+description: "GET /api/v1/tickets/:id retrieves a single support ticket by its numeric ID. Returns 404 if the ticket does not exist."
+---
+
+Fetch a single support ticket by its auto-incremented numeric ID. Use this endpoint to display full ticket details in the Admin Dashboard, poll for status changes after creation, or retrieve the AI-generated response for display to the customer.
+
+## Request
+
+**`GET /api/v1/tickets/:id`**
+
+### Path Parameters
+
+<ParamField path="id" type="number" required>
+  The ticket's numeric ID. This is the `id` value returned when the ticket was created via `POST /api/v1/tickets`. Must be a valid integer — non-integer values will result in a database lookup for `NaN` and typically return `404`.
+</ParamField>
+
+### Example
+
+```bash
+curl http://localhost:3001/api/v1/tickets/42
+```
+
+## Response (200 OK)
+
+Returns a single Ticket object.
+
+<ResponseField name="id" type="number">
+  Auto-incremented ticket ID.
+</ResponseField>
+
+<ResponseField name="user_description" type="string">
+  The original customer problem description submitted at creation time.
+</ResponseField>
+
+<ResponseField name="category" type="string | null">
+  AI-assigned support category. One of: `Billing`, `Technical`, `Shipping`, `Returns`, `Account`, or `Other`. `null` if classification has not yet run.
+</ResponseField>
+
+<ResponseField name="ai_suggested_response" type="string | null">
+  GPT-4o-mini response enriched with knowledge base article snippets and GraphRAG entity context. `null` if classification has not yet run.
+</ResponseField>
+
+<ResponseField name="confidence_score" type="number | null">
+  AI classification confidence between `0.0` and `1.0`. Tickets with score **≥ 0.7** are auto-resolved.
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Current lifecycle status: `ai_resolved`, `pending_agent`, or `closed`.
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  ISO 8601 UTC timestamp recording when the ticket was first created.
+</ResponseField>
+
+<ResponseField name="updated_at" type="string">
+  ISO 8601 UTC timestamp of the most recent update to this ticket.
+</ResponseField>
+
+### Example Response
+
+```json
+{
+  "id": 42,
+  "user_description": "I cannot access my account after changing my email address",
+  "category": "Account",
+  "ai_suggested_response": "To regain access, please use the password reset flow...\n\nRelated articles:\n- Reset your password: Click 'Forgot Password' on the login page...\n\nRelated entities: email, account, password reset",
+  "confidence_score": 0.88,
+  "status": "ai_resolved",
+  "created_at": "2024-01-15T10:30:00.000Z",
+  "updated_at": "2024-01-15T10:30:00.000Z"
+}
+```
+
+## Error Responses
+
+| HTTP Status | Condition |
+|-------------|-----------|
+| `404 Not Found` | No ticket with the given ID exists in the database. Response: `{"error": "Ticket not found"}` |
+| `500 Internal Server Error` | A database error or other unhandled server-side failure occurred. Response: `{"error": "Internal server error"}` |

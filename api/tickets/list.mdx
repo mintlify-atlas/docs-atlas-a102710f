@@ -1,0 +1,104 @@
+---
+title: "GET /api/v1/tickets — List All Support Tickets"
+sidebarTitle: "List Tickets"
+description: "GET /api/v1/tickets returns all tickets sorted by creation date descending. Filter by status using the status query parameter."
+---
+
+Retrieve a list of all support tickets stored in the database. Results are always ordered by `created_at` **descending** so the most recently created tickets appear first. Use the optional `status` query parameter to scope the results to a specific lifecycle stage — useful for building agent queues or dashboard views.
+
+## Request
+
+**`GET /api/v1/tickets`**
+
+### Query Parameters
+
+<ParamField query="status" type="string">
+  Filter the results to tickets whose `status` matches this value. Valid values:
+
+  - `ai_resolved` — Tickets the AI handled with confidence ≥ 0.7
+  - `pending_agent` — Tickets awaiting human agent review
+  - `closed` — Tickets that have been closed
+
+  Omit this parameter entirely to return **all** tickets regardless of status.
+</ParamField>
+
+### Examples
+
+```bash
+# Get all tickets (no filter)
+curl http://localhost:3001/api/v1/tickets
+
+# Get only tickets pending human review
+curl "http://localhost:3001/api/v1/tickets?status=pending_agent"
+
+# Get AI-resolved tickets
+curl "http://localhost:3001/api/v1/tickets?status=ai_resolved"
+```
+
+## Response (200 OK)
+
+Returns a JSON **array** of Ticket objects. The array is empty (`[]`) when no tickets match the filter. Results are sorted by `created_at` descending — newest tickets appear first.
+
+<ResponseField name="tickets" type="Ticket[]">
+  Array of ticket objects. Each element contains the same fields as the single-ticket response from `GET /api/v1/tickets/:id`.
+
+  <Expandable title="Ticket object fields">
+    <ResponseField name="id" type="number">
+      Auto-incremented ticket ID.
+    </ResponseField>
+    <ResponseField name="user_description" type="string">
+      The original customer problem description.
+    </ResponseField>
+    <ResponseField name="category" type="string | null">
+      AI-assigned category: `Billing`, `Technical`, `Shipping`, `Returns`, `Account`, or `Other`.
+    </ResponseField>
+    <ResponseField name="ai_suggested_response" type="string | null">
+      AI-generated response enriched with knowledge base articles and graph entity context.
+    </ResponseField>
+    <ResponseField name="confidence_score" type="number | null">
+      AI confidence score between `0.0` and `1.0`.
+    </ResponseField>
+    <ResponseField name="status" type="string">
+      Current ticket status: `ai_resolved`, `pending_agent`, or `closed`.
+    </ResponseField>
+    <ResponseField name="created_at" type="string">
+      ISO 8601 UTC creation timestamp.
+    </ResponseField>
+    <ResponseField name="updated_at" type="string">
+      ISO 8601 UTC last-updated timestamp.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example Response
+
+```json
+[
+  {
+    "id": 43,
+    "user_description": "My order has been stuck in transit for 10 days",
+    "category": "Shipping",
+    "ai_suggested_response": "We apologize for the delay. Please allow 2–3 business days for carrier updates...\n\nRelated articles:\n- Tracking your order: Visit the tracking portal at...",
+    "confidence_score": 0.91,
+    "status": "ai_resolved",
+    "created_at": "2024-01-15T11:00:00.000Z",
+    "updated_at": "2024-01-15T11:00:00.000Z"
+  },
+  {
+    "id": 42,
+    "user_description": "I cannot access my account after changing my email address",
+    "category": "Account",
+    "ai_suggested_response": "To regain access, please use the password reset flow...\n\nRelated articles:\n- Reset your password: Click 'Forgot Password' on the login page...",
+    "confidence_score": 0.88,
+    "status": "ai_resolved",
+    "created_at": "2024-01-15T10:30:00.000Z",
+    "updated_at": "2024-01-15T10:30:00.000Z"
+  }
+]
+```
+
+## Error Responses
+
+| HTTP Status | Condition |
+|-------------|-----------|
+| `500 Internal Server Error` | A database query error or other unhandled server-side failure. Response: `{"error": "Internal server error"}` |

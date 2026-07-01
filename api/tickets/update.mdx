@@ -1,0 +1,121 @@
+---
+title: "PATCH /api/v1/tickets/:id — Update Ticket Fields"
+sidebarTitle: "Update Ticket"
+description: "PATCH /api/v1/tickets/:id updates one or more fields of a support ticket: status, category, or ai_suggested_response. Returns the updated ticket."
+---
+
+Update one or more mutable fields on an existing ticket. The endpoint accepts a partial body — only fields present in the request are written to the database; all other fields are left unchanged. The updated ticket is returned in the response.
+
+At least one of `status`, `category`, or `ai_suggested_response` must be included in the request body, otherwise the API returns `400`.
+
+## Request
+
+**`PATCH /api/v1/tickets/:id`**
+
+### Path Parameters
+
+<ParamField path="id" type="number" required>
+  The numeric ID of the ticket to update. Returned by `POST /api/v1/tickets` on creation.
+</ParamField>
+
+### Body Parameters
+
+<ParamField body="status" type="string">
+  Set the ticket's lifecycle status. One of:
+  - `ai_resolved` — Mark the ticket as handled by AI
+  - `pending_agent` — Route the ticket back to a human agent queue
+  - `closed` — Mark the ticket as resolved and closed
+</ParamField>
+
+<ParamField body="category" type="string">
+  Override the AI-assigned category with a manually specified value. Useful when an agent determines the AI mis-classified the ticket.
+</ParamField>
+
+<ParamField body="ai_suggested_response" type="string">
+  Replace the AI-generated response with a custom agent-authored reply.
+</ParamField>
+
+<Warning>
+  At least one of `status`, `category`, or `ai_suggested_response` must be present in the request body. Sending an empty object or a body with unrecognized keys will return `400 Bad Request` with `{"error": "No valid fields to update"}`.
+</Warning>
+
+### Examples
+
+```bash
+# Close a resolved ticket
+curl -X PATCH http://localhost:3001/api/v1/tickets/42 \
+  -H "Content-Type: application/json" \
+  -d '{"status": "closed"}'
+
+# Reassign to a human agent and correct the category
+curl -X PATCH http://localhost:3001/api/v1/tickets/42 \
+  -H "Content-Type: application/json" \
+  -d '{"status": "pending_agent", "category": "Billing"}'
+
+# Replace AI response with a custom agent reply
+curl -X PATCH http://localhost:3001/api/v1/tickets/42 \
+  -H "Content-Type: application/json" \
+  -d '{"ai_suggested_response": "Thank you for contacting us. Our billing team will reach out within 24 hours."}'
+```
+
+## Response (200 OK)
+
+Returns the complete updated Ticket object reflecting all applied changes.
+
+<ResponseField name="id" type="number">
+  The ticket's numeric ID (unchanged).
+</ResponseField>
+
+<ResponseField name="user_description" type="string">
+  The original customer problem description (unchanged).
+</ResponseField>
+
+<ResponseField name="category" type="string | null">
+  The category after the update — either the original AI-assigned value or the new value if `category` was provided in the request.
+</ResponseField>
+
+<ResponseField name="ai_suggested_response" type="string | null">
+  The AI-generated or agent-overridden response after the update.
+</ResponseField>
+
+<ResponseField name="confidence_score" type="number | null">
+  AI confidence score (unchanged by this endpoint).
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  The ticket status after the update.
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  ISO 8601 UTC creation timestamp (unchanged).
+</ResponseField>
+
+<ResponseField name="updated_at" type="string">
+  ISO 8601 UTC timestamp reflecting the time of this update, automatically set by the database.
+</ResponseField>
+
+### Example Response
+
+```json
+{
+  "id": 42,
+  "user_description": "I cannot access my account after changing my email address",
+  "category": "Billing",
+  "ai_suggested_response": "To regain access, please use the password reset flow...\n\nRelated articles:\n- Reset your password: Click 'Forgot Password' on the login page...",
+  "confidence_score": 0.88,
+  "status": "pending_agent",
+  "created_at": "2024-01-15T10:30:00.000Z",
+  "updated_at": "2024-01-15T10:45:00.000Z"
+}
+```
+
+## Error Responses
+
+| HTTP Status | Condition |
+|-------------|-----------|
+| `400 Bad Request` | No valid fields (`status`, `category`, or `ai_suggested_response`) were included in the request body. Response: `{"error": "No valid fields to update"}` |
+| `500 Internal Server Error` | The ticket ID does not exist (Prisma throws on a missing `update` target), a database error occurred, or another unhandled server-side failure. Response: `{"error": "Internal server error"}` |
+
+<Tip>
+  This endpoint powers the **Close** and **Reassign to Human** action buttons in the Admin Dashboard. The Close button sends `{"status": "closed"}` and the Reassign button sends `{"status": "pending_agent"}` — optionally paired with a corrected `category` when the agent overrides the AI classification.
+</Tip>

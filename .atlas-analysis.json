@@ -1,0 +1,107 @@
+{
+  "projectType": "saas",
+  "projectName": "AI Ticket Support System",
+  "projectDescription": "A full-stack AI-powered customer support platform that automatically classifies and resolves tickets using GPT-4o-mini, hybrid RAG search, and a GraphRAG knowledge graph.",
+  "theme": "luma",
+  "primaryColor": "#2563EB",
+  "lightColor": "#EFF6FF",
+  "darkColor": "#1E3A5F",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/ticket-lifecycle",
+              "features/ai-classification",
+              "features/rag-search",
+              "features/graphrag"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/environment",
+              "configuration/database",
+              "configuration/redis"
+            ]
+          },
+          {
+            "group": "Frontend",
+            "pages": [
+              "frontend/user-submit",
+              "frontend/admin-dashboard",
+              "frontend/knowledge-base-manager",
+              "frontend/rag-visualizer"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/docker",
+              "deployment/aws"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Tickets",
+            "pages": [
+              "api/overview",
+              "api/tickets/create",
+              "api/tickets/list",
+              "api/tickets/get",
+              "api/tickets/update"
+            ]
+          },
+          {
+            "group": "System",
+            "pages": [
+              "api/health"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "AI ticket classification using GPT-4o-mini with structured JSON output",
+    "Hybrid RAG search combining vector similarity (80%) and recency scoring (20%)",
+    "GraphRAG knowledge graph with entity extraction and BFS graph traversal",
+    "Async entity extraction via Redis/BullMQ worker queues",
+    "pgvector-backed semantic search on PostgreSQL",
+    "Confidence-score-based auto-resolution (≥0.7 = auto-resolved)",
+    "Admin dashboard with ticket filtering and status management",
+    "RAG retrieval visualizer for debugging search and graph context",
+    "Knowledge base manager with importance weighting (0.0–2.0)",
+    "Docker Compose full-stack orchestration"
+  ],
+  "publicApiSurface": [
+    "POST /api/v1/tickets",
+    "GET /api/v1/tickets",
+    "GET /api/v1/tickets/:id",
+    "PATCH /api/v1/tickets/:id",
+    "GET /api/health",
+    "classifyTicket(description: string): Promise<AIResponse>",
+    "generateEmbedding(text: string): Promise<number[]>",
+    "extractEntities(text: string): Promise<ExtractedEntity[]>",
+    "searchKnowledgeBase(query: string, limit?: number): Promise<KnowledgeArticle[]>",
+    "addKnowledgeArticle(title, content, category, importance): Promise<void>",
+    "traverseGraph(startEntityName, maxDepth, maxNodes): Promise<GraphContext>",
+    "findSimilarEntities(query, limit): Promise<GraphNode[]>",
+    "getGraphContextForTicket(ticketDescription): Promise<GraphContext>"
+  ]
+}

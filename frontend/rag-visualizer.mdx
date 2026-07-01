@@ -1,0 +1,144 @@
+---
+title: "RAG Retrieval Visualizer for Debugging AI Context"
+sidebarTitle: "RAG Visualizer"
+description: "The RAG Visualizer shows which knowledge base articles and graph entities the AI used when processing a query, with similarity scores and processing time metrics."
+---
+
+The RAG Visualizer is a developer and agent debugging tool that makes the retrieval process transparent. When the AI generates a response to a support ticket, it first retrieves relevant knowledge base articles using hybrid RAG (vector similarity + recency scoring) and pulls relational context from the GraphRAG entity graph. The Visualizer lets you run any query string through this same retrieval pipeline and see exactly which articles were returned, what their similarity and hybrid scores were, which graph entities were involved, and how long the whole process took.
+
+This is especially useful during knowledge base setup, after adding new articles, or when an AI response seems off and you want to verify what context the model actually had access to.
+
+The page is built in `src/pages/RagVisualizer.tsx`.
+
+## Accessing it
+
+<Steps>
+  <Step title="Open the application">
+    Navigate to `http://localhost` in your browser (or `http://localhost:3000` in development mode).
+  </Step>
+  <Step title="Click RAG Visualizer">
+    In the blue top navigation bar, click **RAG Visualizer**. This routes to `/rag-visualizer`.
+  </Step>
+</Steps>
+
+## How to use it
+
+<Steps>
+  <Step title="Enter a query string">
+    Type a support query into the input field at the top of the page. Use realistic phrases that customers might actually submit — this gives you the most accurate picture of what the AI will retrieve in production.
+
+    ```text
+    Example queries to try:
+    "I want to return my order"
+    "My payment was declined"
+    "I forgot my password"
+    "The website keeps timing out"
+    ```
+  </Step>
+  <Step title="Click Visualize">
+    Click the **Visualize** button. The button shows `Visualizing...` while the retrieval pipeline processes the query. Both the retrieved articles panel and the graph context panel will populate once results are ready.
+  </Step>
+  <Step title="Inspect the results panel">
+    Review the three result sections that appear below the input:
+    - **Processing Time** — shown at the top of the results
+    - **Retrieved Articles** — knowledge base articles ranked by score
+    - **Graph Context (GraphRAG)** — entities and relationships extracted from the graph
+  </Step>
+</Steps>
+
+## Retrieved articles panel
+
+The Retrieved Articles section shows every knowledge base article the RAG pipeline surfaced for your query, ranked from highest to lowest hybrid score. Each article entry contains:
+
+- **Title** — the article name (e.g., "How to request a refund")
+- **Category** — the topic area tag (e.g., Returns, Billing, Shipping)
+- **Similarity score** — the raw cosine similarity calculated by pgvector between your query embedding and the article embedding, on a scale of `0.0` to `1.0`. Displayed as a progress bar.
+- **Hybrid score** — the final combined score that incorporates vector similarity, recency, and importance weighting, also `0.0` to `1.0`. This is the value actually used to rank and select articles. Displayed as a progress bar.
+
+Both scores use the same color coding for the progress bar fill:
+
+```typescript
+// RagVisualizer.tsx — score color logic
+const getScoreColor = (score: number): string => {
+  if (score >= 0.8) return 'bg-green-500';   // Strong match
+  if (score >= 0.6) return 'bg-yellow-500';  // Moderate match
+  return 'bg-red-500';                        // Weak match
+};
+```
+
+| Color | Score range | Meaning |
+|---|---|---|
+| 🟢 Green | `≥ 0.8` | Strong match — this article is highly relevant |
+| 🟡 Yellow | `≥ 0.6` | Moderate match — relevant but not the best fit |
+| 🔴 Red | `< 0.6` | Weak match — may not contribute useful context |
+
+Example output for the query `"I want to return my order"`:
+
+```json
+[
+  {
+    "title": "How to request a refund",
+    "similarity": 0.85,
+    "hybridScore": 0.82,
+    "category": "Returns"
+  },
+  {
+    "title": "Payment methods accepted",
+    "similarity": 0.72,
+    "hybridScore": 0.75,
+    "category": "Billing"
+  }
+]
+```
+
+## Graph context panel
+
+The Graph Context section displays the **GraphRAG** component of the retrieval — structured entity and relationship data extracted from the knowledge base and stored as a graph. This context supplements the vector-retrieved articles with explicit relational information that the AI can use when composing its response.
+
+The panel is split into two columns:
+
+### Entities
+
+Each entity node from the graph is listed with:
+- **Name** — the entity label (e.g., `Refund`, `Payment`, `Credit Card`)
+- **Type** — one of: `Person`, `Place`, `Concept`, `Product`, or `Organization`
+
+```typescript
+// RagVisualizationData interface
+graphContext: {
+  nodes: Array<{ name: string; type: string }>;
+  edges: Array<{ from: number; to: number; relationType: string }>;
+}
+```
+
+### Relationships
+
+Each graph edge is displayed as a directional statement:
+
+```
+Refund  →  Payment  (related_to)
+Payment  →  Credit Card  (accepts)
+```
+
+The `from` and `to` fields in each edge are integer indexes into the `nodes` array. The `relationType` string describes the semantic relationship between the two entities — for example `related_to`, `accepts`, `part_of`, or `requires`.
+
+## Processing time
+
+The processing time banner appears at the very top of the results panel and shows how long the full retrieval pipeline took in milliseconds:
+
+```typescript
+// Displayed in the results panel
+<span className="text-blue-600 font-bold">
+  {visualizationData.processingTime}ms
+</span>
+```
+
+This metric reflects the end-to-end time for embedding the query, running the pgvector similarity search, applying the hybrid scoring formula, and resolving the graph context. For a well-configured system, typical retrieval times are in the range of `100ms–300ms`.
+
+<Note>
+  The current RAG Visualizer uses **simulated data** — the `handleVisualize` function generates a hardcoded `RagVisualizationData` object rather than calling a live backend endpoint. It is designed to demonstrate the full UI structure and score visualization layout. A production implementation would replace the simulation block with a real API call to a dedicated `/api/v1/rag/visualize` endpoint that runs the actual hybrid RAG and GraphRAG pipeline against your pgvector database and graph store.
+</Note>
+
+<Tip>
+  Use the RAG Visualizer to **test your knowledge base coverage** before going live. Run the 10–20 most common support queries your team expects to receive and verify that the correct articles appear in green (score ≥ 0.8). If important articles are scoring yellow or red, consider increasing their `importance` weight in the [Knowledge Base Manager](/frontend/knowledge-base-manager) or reviewing whether the article content needs to be rewritten to better match how customers phrase their questions.
+</Tip>

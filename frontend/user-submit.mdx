@@ -1,0 +1,112 @@
+---
+title: "User Ticket Submission Interface"
+sidebarTitle: "User Submit"
+description: "The customer-facing React page where users submit support tickets. A text area accepts a problem description and the AI responds within seconds."
+---
+
+The User Submit page is the customer-facing entry point of the AI Support System. It renders a clean, centered form where any user can describe their support issue in plain text. Once submitted, the ticket is passed to the GPT-4o-mini pipeline — which classifies the problem, generates a suggested response, scores its own confidence, and returns a result to the user in seconds. No authentication or account is required to submit.
+
+The page itself is intentionally minimal. The `UserSubmit` React component acts as a thin wrapper that renders the `TicketForm` component inside a centered container. All submission logic, state management, and response rendering live inside `TicketForm`.
+
+## How to use it
+
+Submitting a ticket is a three-step process:
+
+<Steps>
+  <Step title="Navigate to the page">
+    Open your browser and go to:
+    - **Production:** `http://localhost` (served by Nginx on port 80)
+    - **Development:** `http://localhost:3000` (Vite dev server)
+
+    The **Submit Ticket** link in the top navigation bar always routes back to `/`.
+  </Step>
+  <Step title="Describe your problem">
+    Type a detailed description of your issue into the **"Describe your problem"** textarea. The more context you provide, the more accurately the AI can classify and respond to your ticket.
+
+    ```text
+    Example input:
+    "I placed an order three days ago but haven't received
+    a tracking number. My order ID is #84729."
+    ```
+  </Step>
+  <Step title="Submit and review the AI response">
+    Click **Submit Ticket**. The button shows a `Submitting...` spinner while the request is in flight. On success, a green confirmation banner appears and the form resets. The AI-generated response fields — category, suggested reply, and confidence score — are available immediately via the ticket record.
+  </Step>
+</Steps>
+
+## Ticket submission API call
+
+When the user clicks **Submit Ticket**, `TicketForm` calls `ticketService.createTicket` from `src/services/api.ts`. This sends a `POST` request to the backend at `http://localhost:3001/api/v1/tickets`.
+
+```typescript
+const ticket = await ticketService.createTicket({
+  user_description: "I cannot log into my account"
+});
+```
+
+The full `ticketService` definition for reference:
+
+```typescript
+// src/services/api.ts
+const API_BASE_URL = 'http://localhost:3001/api/v1';
+
+export const ticketService = {
+  createTicket: async (data: CreateTicketRequest): Promise<Ticket> => {
+    const response = await api.post<Ticket>('/tickets', data);
+    return response.data;
+  },
+};
+```
+
+The request body is simply:
+
+```json
+{
+  "user_description": "I cannot log into my account"
+}
+```
+
+## Response display
+
+After a successful submission the backend returns a fully populated `Ticket` object. The following fields are surfaced in the UI:
+
+| Field | Type | Description |
+|---|---|---|
+| `category` | `string` | AI-assigned category (e.g., `Account`, `Billing`, `Shipping`) |
+| `ai_suggested_response` | `string` | The GPT-4o-mini generated reply shown to the agent or user |
+| `confidence_score` | `number` | Float between `0.0` and `1.0` representing AI certainty |
+| `status` | `string` | Either `ai_resolved` or `pending_agent` |
+
+The `TicketCard` component renders these fields. The `confidence_score` is displayed as a percentage with color coding — green for `≥ 0.7`, yellow for `≥ 0.5`, and red for anything below.
+
+```typescript
+// From TicketCard.tsx — confidence color logic
+const getConfidenceColor = (score: number): string => {
+  if (score >= 0.7) return 'text-green-600';
+  if (score >= 0.5) return 'text-yellow-600';
+  return 'text-red-600';
+};
+```
+
+<Info>
+  **`ai_resolved` vs `pending_agent`**
+
+  - **`ai_resolved`** — The AI confidence score was high enough (≥ 0.7) for the system to handle the ticket automatically. No human agent needs to review it unless they choose to.
+  - **`pending_agent`** — The AI confidence was below the threshold (< 0.7), meaning the system is not confident in its response. The ticket is flagged and queued for a human support agent to review before any reply is sent to the customer.
+</Info>
+
+## Components used
+
+The User Submit page is composed of three React components:
+
+<CardGroup cols={3}>
+  <Card title="TicketForm" icon="file-pen">
+    The primary form component at `src/components/TicketForm.tsx`. Renders the description textarea (6 rows) and the submit button. Manages `isSubmitting`, `submitSuccess`, and `error` state internally. Calls `ticketService.createTicket` on form submission.
+  </Card>
+  <Card title="TicketCard" icon="id-card">
+    Located at `src/components/TicketCard.tsx`. Displays a single ticket's full details: ticket ID, user description, category, confidence score (color-coded), AI suggested response (first 200 characters), `StatusBadge`, and action buttons. Accepts `onCloseTicket` and `onReassignToHuman` callbacks.
+  </Card>
+  <Card title="StatusBadge" icon="tag">
+    Located at `src/components/StatusBadge.tsx`. A small pill badge that maps each status value to a Tailwind color class: green for `ai_resolved`, yellow for `pending_agent`, and gray for `closed`. Used inside `TicketCard` for at-a-glance status identification.
+  </Card>
+</CardGroup>

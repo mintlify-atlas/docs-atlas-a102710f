@@ -1,0 +1,117 @@
+---
+title: "Knowledge Base Manager: Article Importance Tuning"
+sidebarTitle: "Knowledge Base"
+description: "The Knowledge Base Manager lets agents view and adjust article importance weights that control how the hybrid RAG search ranks retrieved knowledge base articles."
+---
+
+The Knowledge Base Manager is the administrative interface for tuning how the hybrid RAG pipeline retrieves and ranks support articles. Rather than treating all knowledge base articles equally, the system assigns each article an **importance weight** — a numeric multiplier that influences how prominently an article surfaces when the AI is searching for context to answer a support ticket. Agents can view all articles, inspect their current importance values, and update them directly in the UI.
+
+The page is built in `src/pages/KnowledgeBaseManager.tsx` and uses the `ticketService` from `src/services/api.ts` for data operations.
+
+## Accessing it
+
+<Steps>
+  <Step title="Open the application">
+    Navigate to `http://localhost` in your browser (or `http://localhost:3000` in development mode).
+  </Step>
+  <Step title="Click Knowledge Base">
+    In the blue top navigation bar, click **Knowledge Base**. This routes to `/knowledge-base`.
+  </Step>
+</Steps>
+
+## Importance weight system
+
+Each knowledge base article carries an `importance` field — a float between `0.0` and `2.0`. This value acts as a multiplier within the hybrid RAG scoring formula that determines which articles are retrieved and passed as context to GPT-4o-mini.
+
+The hybrid scoring formula is:
+
+```
+finalScore = (vectorSimilarity × 0.8) + (recencyScore × 0.2) × importance
+```
+
+The importance value scales the recency component of the score. An article with `importance: 2.0` will have its recency contribution doubled, making it much more likely to appear in the top retrieved results even when it is slightly older or the vector similarity is not the highest.
+
+**Key thresholds:**
+- Articles with `importance ≥ 1.5` are treated as **critical** and are consistently prioritized in retrieval.
+- The default importance for new articles is `1.0`.
+- Setting importance to `0.0` effectively removes the recency bonus entirely — the article can still be retrieved, but only on strong vector similarity.
+
+## Color coding
+
+Each article's importance value is rendered as a color-coded badge so agents can quickly scan the list for articles that need attention:
+
+<CardGroup cols={4}>
+  <Card title="Critical" icon="circle" iconType="solid">
+    **Purple** — Importance `≥ 1.5`. Highest priority articles. These surface in nearly every relevant query. Use for foundational policies, high-frequency issues, or legally important information.
+  </Card>
+  <Card title="Standard" icon="circle" iconType="solid">
+    **Green** — Importance `≥ 1.0`. Normal priority. The default level for most articles. Retrieved regularly when the vector similarity is a good match.
+  </Card>
+  <Card title="Low" icon="circle" iconType="solid">
+    **Yellow** — Importance `≥ 0.5`. Deprioritized. These articles are surfaced less frequently. Useful for niche topics that should not compete with core articles.
+  </Card>
+  <Card title="Minimal" icon="circle" iconType="solid">
+    **Gray** — Importance `< 0.5`. Rarely surfaced. The recency bonus is nearly eliminated. Reserve this for outdated articles that are being kept for archival purposes.
+  </Card>
+</CardGroup>
+
+The color logic is implemented in `KnowledgeBaseManager.tsx`:
+
+```typescript
+const getImportanceColor = (importance: number): string => {
+  if (importance >= 1.5) return 'text-purple-600 bg-purple-100';
+  if (importance >= 1.0) return 'text-green-600 bg-green-100';
+  if (importance >= 0.5) return 'text-yellow-600 bg-yellow-100';
+  return 'text-gray-600 bg-gray-100';
+};
+```
+
+## Editing importance
+
+Adjusting an article's importance weight is done inline on the Knowledge Base Manager page:
+
+<Steps>
+  <Step title="Find the article">
+    Scroll through the article list to find the entry you want to update. Each card shows the article title, category tag, content preview, and its current importance badge.
+  </Step>
+  <Step title="Click Edit">
+    Click the blue **Edit** button on the right side of the article card. The importance badge is replaced with a numeric input field pre-filled with the article's current value.
+  </Step>
+  <Step title="Adjust the value">
+    Use the numeric input to set the new importance. The input accepts values from `0` to `2` in increments of `0.1`.
+
+    ```typescript
+    <input
+      type="number"
+      step="0.1"
+      min="0"
+      max="2"
+      value={editImportance}
+      onChange={(e) => setEditImportance(parseFloat(e.target.value))}
+    />
+    ```
+  </Step>
+  <Step title="Save or cancel">
+    Click **Save** to apply the change, or **Cancel** to discard it and return to the badge view. After saving, the importance badge immediately reflects the new value with the appropriate color.
+  </Step>
+</Steps>
+
+## Default articles
+
+The system is preloaded with 5 knowledge base articles that cover the most common support categories. These are initialized by the RAG service on startup:
+
+| # | Title | Category | Default Importance |
+|---|---|---|---|
+| 1 | How to request a refund | Returns | 1.0 |
+| 2 | Payment methods accepted | Billing | 1.0 |
+| 3 | Track your order | Shipping | 0.8 |
+| 4 | Reset your password | Account | 1.0 |
+| 5 | Website not loading | Technical | 1.0 |
+
+These articles form the base retrieval set. For new deployments, start by reviewing whether any of these should be elevated to `importance: 1.5` based on your support ticket volume by category.
+
+<Note>
+  Changes made in the Knowledge Base Manager UI are **client-side only** in the current implementation. The updated importance values are written to local React state (`useState`) and are not persisted to the database. If you restart the page, all values reset to their defaults.
+
+  To persist importance changes, either call the `addKnowledgeArticle` function directly in the RAG service backend, or extend the API with a `PATCH /api/v1/knowledge/:id` endpoint and wire it to the `handleUpdateImportance` function in `KnowledgeBaseManager.tsx`.
+</Note>

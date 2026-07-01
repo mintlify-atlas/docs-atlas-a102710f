@@ -1,0 +1,73 @@
+---
+title: "AI Ticket Support System: Intelligent Customer Support"
+sidebarTitle: "Introduction"
+description: "AI Ticket Support System uses GPT-4o-mini, hybrid RAG, and a GraphRAG knowledge graph to automatically classify and resolve customer support tickets."
+---
+
+The AI Ticket Support System is a full-stack customer support platform that automatically classifies incoming support tickets, retrieves contextually relevant knowledge, and generates accurate responses — all without human intervention for high-confidence cases. Powered by GPT-4o-mini, a hybrid RAG retrieval pipeline, and a GraphRAG entity knowledge graph, the system dramatically reduces the load on human support agents while maintaining response quality and factual accuracy.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Run the full stack locally in minutes using Docker Compose.
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture">
+    Explore the layered system design, service topology, and request flow.
+  </Card>
+  <Card title="Core Features" icon="stars" href="/features/ticket-lifecycle">
+    Understand the end-to-end ticket lifecycle from submission to resolution.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Browse all REST endpoints for creating, retrieving, and updating tickets.
+  </Card>
+</CardGroup>
+
+## What makes it intelligent
+
+The system processes every incoming ticket through a three-layer AI pipeline that combines large language model reasoning with structured knowledge retrieval:
+
+**1. GPT-4o-mini classification**
+
+Each ticket description is sent to GPT-4o-mini along with retrieved context. The model returns a structured JSON response containing a category (e.g. Billing, Technical, Shipping, Account), an AI-generated suggested response, and a confidence score between 0.0 and 1.0. A low temperature of 0.3 ensures consistent, deterministic outputs. OpenAI's `response_format` structured outputs mode is used to eliminate parsing errors.
+
+**2. Hybrid RAG search (vector similarity + recency scoring)**
+
+Before the LLM is called, the system searches the knowledge base using a hybrid scoring formula:
+
+```
+finalScore = (vectorSimilarity * 0.8) + (recencyScore * 0.2) * importance
+```
+
+Vector embeddings are generated with `text-embedding-3-small` and stored in PostgreSQL via the `pgvector` extension. The recency component decays over one year so that newer articles surface naturally. Each article also carries a manual `importance` weight (1.0–2.0), giving knowledge base managers direct control over retrieval priority.
+
+**3. GraphRAG entity knowledge graph**
+
+Alongside RAG retrieval, the system asynchronously extracts named entities — People, Places, Concepts, Products, and Organizations — from every ticket description. These entities are stored in PostgreSQL with their own vector embeddings and linked through a typed relationship graph. At query time, a BFS traversal of the graph adds rich relational context to the prompt, helping the model understand connections between products, users, and concepts that pure keyword or vector search would miss.
+
+## Technology stack
+
+| Layer | Technology |
+|---|---|
+| **Backend runtime** | Node.js 18+ with TypeScript |
+| **Web framework** | Express 4 |
+| **ORM & migrations** | Prisma 5 |
+| **Frontend** | React with TypeScript + TailwindCSS |
+| **Primary database** | PostgreSQL 16 |
+| **Vector search** | pgvector extension (cosine distance) |
+| **Job queue** | Redis 7 + BullMQ 5 |
+| **AI provider** | OpenAI GPT-4o-mini + text-embedding-3-small |
+
+## Ticket statuses
+
+Every ticket lands in one of three states after the AI pipeline runs:
+
+| Status | Condition | Meaning |
+|---|---|---|
+| `ai_resolved` | Confidence score ≥ 0.7 | The AI response is shown directly to the user; no agent action required |
+| `pending_agent` | Confidence score < 0.7 | Routed to the human agent queue for review and manual response |
+| `closed` | Agent or system action | Ticket has been resolved and closed |
+
+Low-confidence tickets are never auto-resolved. This threshold-based fallback is the primary hallucination mitigation strategy in the system: if the model is uncertain, a human decides.
+
+<Note>
+  An OpenAI API key is required to run the AI Ticket Support System. All embedding generation and classification calls are made to the OpenAI API. Set `OPENAI_API_KEY` in your `.env` file before starting any service.
+</Note>

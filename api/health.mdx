@@ -1,0 +1,45 @@
+---
+title: "GET /api/health — Service Health Check"
+sidebarTitle: "Health Check"
+description: "GET /api/health returns service status and the current timestamp. Use this endpoint to verify the backend is running and reachable."
+---
+
+The health check endpoint provides a fast, lightweight signal that the AI Ticket Support System backend is up and accepting connections. It does not query the database, the AI service, or the Redis queue — it simply returns a static status string and the current server time. Use it to confirm the process is running before making ticket API calls.
+
+## Request
+
+**`GET /api/health`**
+
+<Note>
+  This endpoint is mounted at `/api/health` — **not** under the versioned `/api/v1` prefix. It is intentionally kept outside the versioned namespace so that infrastructure tooling can reach it regardless of API version routing.
+</Note>
+
+```bash
+curl http://localhost:3001/api/health
+```
+
+## Response (200 OK)
+
+<ResponseField name="status" type="string">
+  Always `"ok"` when the server process is running and able to handle requests.
+</ResponseField>
+
+<ResponseField name="timestamp" type="string">
+  ISO 8601 UTC timestamp generated at the moment the request was handled (via `new Date().toISOString()`). Useful for confirming the server clock and verifying the response is fresh (not cached).
+</ResponseField>
+
+### Example Response
+
+```json
+{
+  "status": "ok",
+  "timestamp": "2024-01-15T10:30:00.000Z"
+}
+```
+
+<Tip>
+  This endpoint is well-suited for:
+  - **Docker health checks** — use `HEALTHCHECK CMD curl -f http://localhost:3001/api/health || exit 1` in your `Dockerfile` or `docker-compose.yml` `healthcheck` block.
+  - **Load balancer target group health checks** — configure your AWS ALB, GCP load balancer, or NGINX upstream health probe to `GET /api/health` and expect a `200` response.
+  - **Uptime monitoring** — point tools like UptimeRobot, Betterstack, or Datadog Synthetics at this URL for continuous availability checks.
+</Tip>

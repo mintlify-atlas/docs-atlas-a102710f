@@ -1,0 +1,208 @@
+---
+title: "Docker Compose Deployment Guide"
+sidebarTitle: "Docker"
+description: "Deploy the full AI Ticket Support System stack with Docker Compose. Orchestrates PostgreSQL with pgvector, Redis, the Node.js backend, and React frontend."
+---
+
+Docker Compose is the recommended way to run the AI Ticket Support System locally and in staging environments. A single `docker-compose up` command brings up all four services — PostgreSQL with pgvector, Redis, the Node.js backend, and the React/nginx frontend — with health checks, named volumes, and correct inter-service networking configured automatically.
+
+## Prerequisites
+
+- **Docker Engine 24+** — verify with `docker --version`
+- **Docker Compose v2** — verify with `docker compose version` (the `docker compose` plugin, or the standalone `docker-compose` CLI v2.x)
+- **OpenAI API key** — required at runtime; the backend will fail to start AI features without it
+
+## Quick start
+
+<Steps>
+  <Step title="Clone the repository and enter the project directory">
+    ```bash
+    git clone <repository-url>
+    cd ai-ticket-support
+    ```
+  </Step>
+
+  <Step title="Create a .env file at the project root">
+    The only value that must be supplied is your OpenAI API key. All other variables (database credentials, ports, Redis host) already have working defaults wired directly into `docker-compose.yml`.
+
+    ```bash
+    echo "OPENAI_API_KEY=sk-..." > .env
+    ```
+
+    Your `.env` file should contain at minimum:
+
+    ```bash
+    OPENAI_API_KEY=sk-...
+    ```
+  </Step>
+
+  <Step title="Start all services">
+    **Attached mode** (logs stream to your terminal — useful for first-run debugging):
+
+    ```bash
+    docker-compose up
+    ```
+
+    **Detached mode** (services run in the background):
+
+    ```bash
+    docker-compose up -d
+    ```
+  </Step>
+
+  <Step title="Wait for all health checks to pass">
+    Both `postgres` and `redis` expose health checks. The backend container waits for `service_healthy` on both before starting. You can monitor progress with:
+
+    ```bash
+    docker-compose ps
+    ```
+
+    All four services should reach **Up (healthy)** or **Up** status. The backend also runs `npx prisma generate` on startup before the development server comes online — this is normal and takes a few seconds.
+  </Step>
+
+  <Step title="Access the application">
+    Once all services are running, open your browser:
+
+    | Service | URL |
+    |---|---|
+    | Frontend (React) | http://localhost |
+    | Backend API | http://localhost:3001 |
+    | Admin Dashboard | http://localhost → click **Admin Dashboard** |
+    | RAG Visualizer | http://localhost → click **RAG Visualizer** |
+    | Knowledge Base Manager | http://localhost → click **Knowledge Base** |
+  </Step>
+</Steps>
+
+## Services
+
+The following four services are defined in `docker-compose.yml`:
+
+| Service | Image | Exposed Port | Notes |
+|---|---|---|---|
+| `postgres` | `pgvector/pgvector:pg16` | `5432` | Persistent volume `postgres_data`; health check: `pg_isready -U postgres` (interval 10s, retries 5) |
+| `redis` | `redis:7-alpine` | `6379` | Persistent volume `redis_data`; health check: `redis-cli ping` (interval 10s, retries 5) |
+| `backend` | Built from `./backend/Dockerfile` | `3001` | Depends on `postgres` and `redis` reaching healthy; runs `npx prisma generate && npm run dev` on start |
+| `frontend` | Built from `./frontend/Dockerfile` | `80` | Multi-stage build — React app compiled with Node 18, served by `nginx:alpine`; depends on `backend` |
+
+### Backend Dockerfile
+
+The backend image is based on `node:18-alpine`. It copies `package*.json`, installs dependencies, copies the full source, runs `npx prisma generate` at build time, then builds the TypeScript project with `npm run build`:
+
+```dockerfile
+FROM node:18-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npx prisma generate
+RUN npm run build
+
+EXPOSE 3001
+CMD ["npm", "start"]
+```
+
+### Frontend Dockerfile
+
+The frontend uses a two-stage build: Node 18 compiles the React app, then the compiled output is copied into a clean `nginx:alpine` image for serving:
+
+```dockerfile
+FROM node:18-alpine as build
+
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npm run build
+
+FROM nginx:alpine
+COPY --from=build /app/build /usr/share/nginx/html
+
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
+```
+
+## Volumes
+
+Two named Docker volumes provide data persistence across container restarts and re-creates:
+
+| Volume | Mounted in | Path inside container |
+|---|---|---|
+| `postgres_data` | `postgres` service | `/var/lib/postgresql/data` |
+| `redis_data` | `redis` service | `/data` |
+
+These volumes are managed by Docker and survive `docker-compose down`. To remove them and wipe all stored data, use `docker-compose down -v` (see [Useful commands](#useful-commands) below).
+
+## Environment variables in Docker
+
+The backend service receives its configuration via the `environment` block in `docker-compose.yml`:
+
+```yaml
+environment:
+  PORT: 3001
+  NODE_ENV: development
+  DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ticket_system
+  OPENAI_API_KEY: ${OPENAI_API_KEY}
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+```
+
+Two values are worth highlighting:
+
+- **`DATABASE_URL`** uses `postgres` (the Compose service name) as the hostname — Docker's internal DNS resolves this automatically within the Compose network. Do **not** use `localhost` here.
+- **`REDIS_HOST`** is set to `redis` for the same reason — inter-service communication uses service names, not `localhost`.
+- **`OPENAI_API_KEY`** is interpolated at runtime from your `.env` file via the `${OPENAI_API_KEY}` syntax and is never hard-coded in the Compose file.
+
+For reference, the full set of backend environment variables (from `backend/.env.example`):
+
+```bash
+PORT=3001
+NODE_ENV=development
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/ticket_system
+OPENAI_API_KEY=your_openai_api_key_here
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=
+```
+
+## Useful commands
+
+```bash
+# Stream logs from the backend
+docker-compose logs -f backend
+
+# Stream logs from all services
+docker-compose logs -f
+
+# Restart a single service without recreating others
+docker-compose restart backend
+
+# Stop all services (preserves volumes)
+docker-compose down
+
+# Stop and remove volumes — WARNING: deletes all PostgreSQL and Redis data
+docker-compose down -v
+
+# Run Prisma migrations interactively inside the running backend container
+docker-compose exec backend npx prisma migrate dev
+
+# Open Prisma Studio (database GUI) on http://localhost:5555
+docker-compose exec backend npx prisma studio
+
+# Rebuild a service image after a code change
+docker-compose up --build backend
+```
+
+## Production considerations
+
+<Warning>
+  The default Docker Compose configuration targets local development. It sets `NODE_ENV=development`, uses weak default credentials (`postgres`/`postgres`), and mounts source directories as volumes for hot-reload. **Do not use this configuration in production without the following changes:**
+
+  - Set `NODE_ENV=production` in the backend environment block.
+  - Replace the default `POSTGRES_USER` / `POSTGRES_PASSWORD` with strong, randomly generated credentials, and update `DATABASE_URL` accordingly.
+  - Set a strong `REDIS_PASSWORD` and pass it via `REDIS_PASSWORD` to the backend.
+  - Inject `OPENAI_API_KEY` from a secrets manager (e.g., AWS Secrets Manager, HashiCorp Vault) rather than a plaintext `.env` file.
+  - Build dedicated production images — remove the source-code bind mounts (`./backend:/app`, `./frontend:/app`) so containers only contain compiled artefacts.
+  - Add resource limits (`deploy.resources`) to each service to prevent runaway memory/CPU consumption.
+</Warning>

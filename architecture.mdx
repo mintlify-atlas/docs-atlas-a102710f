@@ -1,0 +1,126 @@
+---
+title: "System Architecture of AI Ticket Support"
+sidebarTitle: "Architecture"
+description: "Overview of the AI Ticket Support System's layered architecture: React frontend, Express backend, PostgreSQL/pgvector database, Redis queue, and OpenAI API."
+---
+
+The AI Ticket Support System is built as a full-stack application with clearly separated concerns across five layers: a React frontend served by nginx, a Node.js/Express API backend, a PostgreSQL database with the pgvector extension, a Redis-backed job queue for asynchronous processing, and the OpenAI API for all language model and embedding calls. Each layer is containerized and orchestrated via Docker Compose for local development, with a straightforward path to cloud deployment on AWS ECS or similar container platforms.
+
+## Component overview
+
+<CardGroup cols={2}>
+  <Card title="Frontend" icon="browser">
+    Built with **React** and **TypeScript**, styled with **TailwindCSS**, and served in production by an **nginx** container on port 80. Includes the ticket submission form, admin dashboard, RAG visualizer, and knowledge base manager.
+  </Card>
+  <Card title="Backend API" icon="server">
+    **Express 4** on **Node.js 18+** written entirely in **TypeScript**. Exposes a versioned REST API under `/api/v1/`. Manages the full ticket lifecycle, orchestrates the AI pipeline, and owns all database access through **Prisma 5**.
+  </Card>
+  <Card title="Database" icon="database">
+    **PostgreSQL 16** using the `pgvector/pgvector:pg16` image. Stores tickets, knowledge base articles, users, and GraphRAG entities. The **pgvector** extension enables native cosine-distance vector search without a separate vector database.
+  </Card>
+  <Card title="Queue" icon="list-check">
+    **Redis 7** (Alpine) acts as the message broker. **BullMQ 5** manages named job queues with retry logic and exponential backoff. Used exclusively for async entity extraction, keeping ticket creation non-blocking.
+  </Card>
+</CardGroup>
+
+## Request flow
+
+<Steps>
+  <Step title="User submits a ticket">
+    The React frontend sends a `POST /api/v1/tickets` request with a `user_description` string to the Express backend.
+  </Step>
+  <Step title="Backend validates and starts the AI pipeline">
+    The backend validates the request body, then calls the AI service. An embedding is generated for the ticket description using OpenAI `text-embedding-3-small`.
+  </Step>
+  <Step title="Hybrid RAG search + GraphRAG context retrieval">
+    The embedding is used to query the PostgreSQL knowledge base via pgvector. A hybrid score is computed for each article:
+
+    ```
+    finalScore = (vectorSimilarity * 0.8) + (recencyScore * 0.2) * importance
+    ```
+
+    In parallel, the graph service performs a BFS traversal of the entity knowledge graph to surface related entities and their relationships, adding structured context to the prompt.
+  </Step>
+  <Step title="GPT-4o-mini classification">
+    The ticket description, top-ranked knowledge base articles, and graph context are assembled into a prompt and sent to GPT-4o-mini (temperature 0.3, structured outputs mode). The model returns a JSON object containing `category`, `ai_suggested_response`, and `confidence_score`.
+  </Step>
+  <Step title="Ticket stored in PostgreSQL">
+    The AI response is merged with the original ticket data. If `confidence_score ≥ 0.7`, status is set to `ai_resolved`; otherwise `pending_agent`. The complete ticket record is persisted to PostgreSQL via Prisma.
+  </Step>
+  <Step title="Async entity extraction queued in Redis">
+    A BullMQ job is enqueued in Redis to extract named entities from the ticket description in the background. This step is non-blocking — the API response is returned to the user immediately without waiting for entity extraction to complete.
+  </Step>
+  <Step title="Response returned to the user">
+    The full ticket object (including AI category, suggested response, confidence score, and status) is returned to the frontend as JSON.
+  </Step>
+</Steps>
+
+## Service ports
+
+| Service | Port | Description |
+|---|---|---|
+| `postgres` | 5432 | PostgreSQL 16 with pgvector extension |
+| `redis` | 6379 | Redis 7 message broker for BullMQ |
+| `backend` | 3001 | Express REST API and entity extraction worker |
+| `frontend` | 80 | nginx serving the built React application |
+
+## Docker Compose services
+
+Each service in `docker-compose.yml` has a specific role and dependency chain:
+
+**`postgres`** — Uses the `pgvector/pgvector:pg16` image, which ships with the pgvector extension pre-installed. Exposes port 5432 and persists data to a named Docker volume (`postgres_data`). A health check (`pg_isready`) prevents dependent services from starting before the database is ready.
+
+**`redis`** — Uses the lightweight `redis:7-alpine` image. Exposes port 6379 and persists queue data to a named volume (`redis_data`). A health check (`redis-cli ping`) gates backend startup.
+
+**`backend`** — Built from `./backend/Dockerfile`. Depends on both `postgres` and `redis` via `condition: service_healthy`, ensuring it only starts after both pass their health checks. On startup it runs:
+
+```bash
+sh -c "npx prisma generate && npm run dev"
+```
+
+This applies all Prisma migrations before the dev server starts. The backend mounts `./backend` as a volume for hot-reload support during development.
+
+**`frontend`** — Built from `./frontend/Dockerfile` and served by nginx on port 80. Depends on the `backend` service. Mounts `./frontend` as a volume for hot-reload during development.
+
+## Data flow diagram
+
+```
+  ┌───────────────────┐
+  │   React Frontend  │  (port 80)
+  └────────┬──────────┘
+           │ POST /api/v1/tickets
+           ▼
+  ┌───────────────────┐
+  │   Express Backend │  (port 3001)
+  └──┬────────────────┘
+     │              │                    │
+     ▼              ▼                    ▼
+┌─────────┐  ┌────────────┐    ┌──────────────────┐
+│PostgreSQL│  │ OpenAI API │    │  Redis (BullMQ)  │
+│(tickets,│  │(embeddings,│    │  entity extract  │
+│ kb, rag)│  │GPT-4o-mini)│    │  job queue       │
+└─────────┘  └────────────┘    └────────┬─────────┘
+                                         │
+                                         ▼
+                               ┌──────────────────┐
+                               │ Entity Extraction│
+                               │     Worker       │
+                               └────────┬─────────┘
+                                        │ writes entities
+                                        ▼
+                               ┌──────────────────┐
+                               │  PostgreSQL       │
+                               │  (entities +      │
+                               │   relations)      │
+                               └──────────────────┘
+```
+
+<Note>
+  The entity extraction worker does **not** run as a separate container or process. It runs inside the backend container and starts automatically on server boot. In `index.ts`, the worker module is imported directly at the top of the file:
+
+  ```typescript
+  import './workers/entityExtractionWorker'; // Start the worker
+  ```
+
+  This means the backend process handles both the HTTP API and background entity extraction concurrently. The BullMQ worker picks up jobs from Redis as they are enqueued by ticket creation requests.
+</Note>

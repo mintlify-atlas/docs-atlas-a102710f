@@ -1,0 +1,102 @@
+---
+title: "Redis Queue Configuration for Background Jobs"
+sidebarTitle: "Redis"
+description: "Configure Redis and BullMQ for the AI Ticket Support System's async entity extraction worker. Covers connection setup, queue behavior, and worker management."
+---
+
+The AI Ticket Support System uses **Redis** as the message broker for **BullMQ**, Node.js's production-grade job queue library. When a support ticket is created, the HTTP handler immediately returns a response to the caller and then enqueues an asynchronous job for GraphRAG entity extraction. This keeps ticket creation fast and decouples the heavier NLP work — entity identification, embedding generation, and knowledge graph updates — from the critical request path.
+
+<Tip>
+  Redis is only required for GraphRAG entity extraction. If you don't need GraphRAG, Redis errors won't affect ticket creation or AI classification. The ticket will still be created and the GPT-4o-mini pipeline will run normally — only the graph-based enrichment step will be skipped.
+</Tip>
+
+## Starting Redis
+
+### Option A — standalone Docker container
+
+```bash
+docker run -d -p 6379:6379 redis:7-alpine
+```
+
+This starts a Redis 7 instance on the default port with no password. It is suitable for local development and mirrors the configuration expected by the default `.env.example` values.
+
+### Option B — Docker Compose (recommended)
+
+The `docker-compose.yml` file already declares a `redis` service using the `redis:7-alpine` image. Running `docker compose up` starts Redis alongside Postgres and the backend automatically — no separate container management is needed.
+
+## Queue: entity-extraction
+
+When a ticket is successfully persisted to the database, the ticket controller adds a job to the `entity-extraction` BullMQ queue with the following payload:
+
+```typescript
+{
+  ticketId: number,  // ID of the newly created Ticket record
+  text: string       // Raw user_description text to extract entities from
+}
+```
+
+The job is named `extract-entities`. BullMQ serialises the payload to JSON and stores it in Redis until the worker picks it up. Because the job is enqueued after the HTTP response has already been sent, the caller never waits for entity extraction to complete.
+
+## Worker
+
+The entity extraction worker — `entityExtractionWorker.ts` — is imported directly in the backend's `index.ts` entry point, so it **starts automatically when the backend server boots**. No separate process is required for standard deployments.
+
+If you want to run the worker in isolation (for example, to scale it independently of the HTTP server, or to debug extraction jobs without starting the full API), you can launch it as a standalone process:
+
+```bash
+cd backend
+npm run worker
+```
+
+The worker registers a BullMQ `Worker` instance that listens on the `entity-extraction` queue. For each `extract-entities` job it receives, it:
+
+1. Calls the OpenAI API to identify named entities in the ticket text.
+2. Generates a `text-embedding-3-small` vector for each entity.
+3. Upserts `Entity` rows and creates `EntityRelation` edges in the database.
+
+## Connection settings
+
+Redis connection parameters are read directly from environment variables at startup inside `src/lib/redis.ts`:
+
+```typescript
+import Redis from 'ioredis';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const redis = new Redis({
+  host: process.env.REDIS_HOST || 'localhost',
+  port: parseInt(process.env.REDIS_PORT || '6379'),
+  password: process.env.REDIS_PASSWORD,
+});
+
+redis.on('connect', () => {
+  console.log('Redis connected');
+});
+
+redis.on('error', (err) => {
+  console.error('Redis connection error:', err);
+});
+
+export default redis;
+```
+
+The same `redis` client instance is shared by both the queue producer (ticket controller) and the BullMQ worker. Configure the connection via the following environment variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `REDIS_HOST` | `localhost` | Hostname of the Redis server |
+| `REDIS_PORT` | `6379` | Port the Redis server listens on |
+| `REDIS_PASSWORD` | _(empty)_ | Auth password; leave empty for no-auth setups |
+
+See [Environment Variables](/configuration/environment) for full details on each variable.
+
+## Fault tolerance
+
+Redis is treated as a **non-critical dependency** for the core ticket workflow. If the Redis connection is unavailable at the moment a ticket is created, the `addJob` call in the controller is wrapped in a `try/catch` block. The exception is silently swallowed — the ticket creation response is unaffected and the HTTP `201` status is still returned to the caller. A warning is logged to the server console so the failure is observable without disrupting the user experience.
+
+This design means:
+
+- **Ticket creation** always succeeds as long as Postgres is reachable.
+- **AI classification** (GPT-4o-mini category + suggested response) always runs synchronously and is unaffected by Redis.
+- **Entity extraction** (GraphRAG) is best-effort; jobs that were not enqueued due to a Redis outage are not retried automatically once Redis recovers.

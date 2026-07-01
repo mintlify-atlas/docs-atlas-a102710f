@@ -1,0 +1,96 @@
+---
+title: "REST API Reference Overview"
+sidebarTitle: "Overview"
+description: "Overview of the AI Ticket Support System REST API. All endpoints are under /api/v1, return JSON, and run on port 3001 by default."
+---
+
+The AI Ticket Support System exposes a REST API that powers ticket creation, classification, retrieval, and management. When a ticket is submitted, the API synchronously runs GPT-4o-mini classification, hybrid RAG search against the knowledge base, and GraphRAG entity-context retrieval before persisting the result. Every response body is JSON.
+
+## Base URL
+
+```
+http://localhost:3001/api/v1
+```
+
+When running via Docker Compose the backend container is published on host port **3001**. All ticket endpoints are prefixed with `/api/v1`. The health check endpoint sits at `/api/health` (outside the versioned prefix).
+
+## Content Type
+
+All requests that carry a body must include the header:
+
+```
+Content-Type: application/json
+```
+
+All successful responses are returned with `Content-Type: application/json`.
+
+## Endpoints Summary
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/tickets` | Create a ticket and trigger AI classification |
+| `GET` | `/api/v1/tickets` | List all tickets, optionally filtered by status |
+| `GET` | `/api/v1/tickets/:id` | Get a specific ticket by its numeric ID |
+| `PATCH` | `/api/v1/tickets/:id` | Update ticket status, category, or response |
+| `GET` | `/api/health` | Health check — returns service status and timestamp |
+
+## Ticket Object
+
+Every ticket endpoint returns objects that conform to the following TypeScript interface, which mirrors the Prisma `Ticket` model backed by PostgreSQL:
+
+```typescript
+interface Ticket {
+  id: number;                           // Auto-incremented primary key
+  user_description: string;             // Original user problem description
+  category: string | null;             // AI-assigned: Billing, Technical, Shipping, Returns, Account, Other
+  ai_suggested_response: string | null; // AI-generated response with RAG context
+  confidence_score: number | null;      // 0.0–1.0 AI confidence; ≥0.7 = auto-resolved
+  status: string;                       // ai_resolved | pending_agent | closed
+  created_at: string;                   // ISO 8601 timestamp
+  updated_at: string;                   // ISO 8601 timestamp
+}
+```
+
+### Field descriptions
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `number` | Auto-incremented primary key assigned by the database. |
+| `user_description` | `string` | The raw problem description submitted by the customer. |
+| `category` | `string \| null` | AI-assigned support category. One of: `Billing`, `Technical`, `Shipping`, `Returns`, `Account`, `Other`. `null` until classification runs. |
+| `ai_suggested_response` | `string \| null` | GPT-4o-mini response enriched with matching knowledge base articles and GraphRAG entity context. `null` until classification runs. |
+| `confidence_score` | `number \| null` | Float between `0.0` and `1.0` representing AI classification confidence. Tickets with a score **≥ 0.7** are automatically set to `ai_resolved`. |
+| `status` | `string` | Lifecycle status. `ai_resolved` — handled automatically; `pending_agent` — needs human review; `closed` — resolved and closed. Default on creation is `pending_agent`, overridden by the confidence threshold. |
+| `created_at` | `string` | ISO 8601 UTC timestamp set at row insertion. |
+| `updated_at` | `string` | ISO 8601 UTC timestamp updated automatically on every write. |
+
+## Error Responses
+
+All error responses share a single-field JSON envelope:
+
+```json
+{ "error": "<error message string>" }
+```
+
+| HTTP Status | When it occurs |
+|-------------|----------------|
+| `400 Bad Request` | A required field is missing (e.g. `user_description`) or no valid update fields were provided. |
+| `404 Not Found` | The requested ticket ID does not exist in the database. |
+| `500 Internal Server Error` | An unexpected server-side error occurred (database failure, AI service error, etc.). |
+
+## Explore Endpoints
+
+<CardGroup cols={2}>
+  <Card title="Create Ticket" icon="plus" href="/api/tickets/create">
+    `POST /api/v1/tickets` — Submit a ticket and trigger the full AI pipeline.
+  </Card>
+  <Card title="List Tickets" icon="list" href="/api/tickets/list">
+    `GET /api/v1/tickets` — Retrieve all tickets, with optional status filtering.
+  </Card>
+  <Card title="Get Ticket" icon="magnifying-glass" href="/api/tickets/get">
+    `GET /api/v1/tickets/:id` — Fetch a single ticket by its numeric ID.
+  </Card>
+  <Card title="Update Ticket" icon="pen-to-square" href="/api/tickets/update">
+    `PATCH /api/v1/tickets/:id` — Update status, category, or AI response.
+  </Card>
+</CardGroup>

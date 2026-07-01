@@ -1,0 +1,127 @@
+---
+title: "AWS Deployment Architecture for AI Ticket Support"
+sidebarTitle: "AWS"
+description: "Deploy the AI Ticket Support System on AWS using ECS Fargate for the backend, S3 and CloudFront for the frontend, and RDS PostgreSQL with pgvector."
+---
+
+AWS provides a robust, scalable foundation for the AI Ticket Support System in production. The platform's three main workloads — the React frontend, the Node.js + GPT-4o-mini backend, and the PostgreSQL + pgvector database — each map naturally to managed AWS services that handle patching, scaling, and high availability. Two architecture patterns are supported depending on your traffic profile and operational preferences.
+
+<Tip>
+  Validate your complete stack locally first using [Docker Compose](/deployment/docker) before deploying to AWS. Docker Compose mirrors the production topology (postgres, redis, backend, frontend) so you can confirm AI classification, RAG retrieval, and GraphRAG entity extraction all work correctly before incurring cloud costs.
+</Tip>
+
+## Architecture overview
+
+<Tabs>
+  <Tab title="Container-based (Recommended)">
+    The container-based approach brings the Docker Compose topology directly into AWS managed container infrastructure, making it straightforward to promote the same images from local to production.
+
+    | Layer | AWS Service |
+    |---|---|
+    | **Frontend** | ECS Fargate (nginx container) **or** S3 + CloudFront for a fully static build |
+    | **Backend** | ECS Fargate — Node.js container with auto-scaling policy |
+    | **Database** | RDS PostgreSQL 15+ with pgvector extension enabled |
+    | **Cache / Queue** | Amazon ElastiCache for Redis (replaces the local Redis container) |
+    | **Secrets** | AWS Secrets Manager — stores `OPENAI_API_KEY` and DB credentials |
+    | **Load Balancer** | Application Load Balancer (ALB) — routes HTTPS traffic to ECS tasks |
+    | **CI/CD** | GitHub Actions or AWS CodePipeline pushing images to ECR |
+
+    **Traffic flow:**
+
+    ```
+    User → CloudFront (CDN) → ALB → ECS Fargate (Backend)
+                                            │
+                              ┌─────────────┴─────────────┐
+                              ▼                           ▼
+                    RDS PostgreSQL + pgvector     ElastiCache Redis
+    ```
+  </Tab>
+
+  <Tab title="Serverless">
+    The serverless option minimises operational overhead and is well-suited for low-to-medium traffic deployments where cold-start latency is acceptable.
+
+    | Layer | AWS Service |
+    |---|---|
+    | **Frontend** | S3 + CloudFront — static React build deployed via `aws s3 sync` |
+    | **Backend** | API Gateway + AWS Lambda (Node.js 18.x runtime) |
+    | **Database** | RDS PostgreSQL 15+ with pgvector extension enabled |
+    | **Secrets** | AWS Secrets Manager — stores `OPENAI_API_KEY` and DB credentials |
+    | **CI/CD** | GitHub Actions with `serverless` framework or AWS SAM |
+
+    **Traffic flow:**
+
+    ```
+    User → CloudFront → S3 (Frontend)
+    User → API Gateway → Lambda (Backend)
+                               │
+                               ▼
+                     RDS PostgreSQL + pgvector
+    ```
+
+    <Warning>
+      Lambda has a maximum execution timeout of 15 minutes, but cold-start latency and connection-pool limitations mean it is less suited for the synchronous GPT-4o-mini calls and BullMQ async workers the backend relies on. Evaluate ECS Fargate if you need persistent Redis-backed job queues.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Key AWS services
+
+<CardGroup cols={2}>
+  <Card title="ECS Fargate" icon="docker">
+    Serverless container execution for the backend and (optionally) frontend. No EC2 instances to manage — AWS handles placement, patching, and scaling. Task definitions map directly to the `docker-compose.yml` service definitions, making promotion from local to production straightforward.
+  </Card>
+  <Card title="RDS PostgreSQL" icon="database">
+    Managed PostgreSQL with automated backups, Multi-AZ failover, and support for the pgvector extension on PostgreSQL 15+. Replaces the `pgvector/pgvector:pg16` Docker container from the local stack with a fully managed, highly available database.
+  </Card>
+  <Card title="CloudFront" icon="globe">
+    AWS's global CDN distributes the compiled React frontend from edge locations worldwide, reducing latency for end users and offloading origin traffic. Works with either an S3 origin (static hosting) or an ALB origin (ECS-served nginx).
+  </Card>
+  <Card title="Secrets Manager" icon="lock">
+    Secure, auditable storage for sensitive credentials including `OPENAI_API_KEY`, `DATABASE_URL`, and Redis passwords. ECS task roles retrieve secrets at runtime via the native Secrets Manager integration — no plaintext environment files required.
+  </Card>
+</CardGroup>
+
+## Security checklist
+
+Follow these practices before exposing the system to production traffic:
+
+- **Store `OPENAI_API_KEY` in AWS Secrets Manager** — never commit it to source control, bake it into container images, or store it in plaintext `.env` files in S3. Reference it in ECS task definitions using the `secrets` field.
+- **Place RDS in a private VPC subnet with no public access** — only ECS tasks (or Lambda functions) inside the same VPC should be able to reach the database port (5432). Use Security Groups to enforce this.
+- **Use IAM roles with least privilege for ECS tasks** — each task definition should have a dedicated IAM task role that grants only the permissions it needs (e.g., `secretsmanager:GetSecretValue` for its own secret ARN, nothing else).
+- **Enforce HTTPS with ACM certificates** — attach a free ACM certificate to your ALB listener and redirect HTTP (port 80) to HTTPS (port 443). CloudFront distributions should also enforce HTTPS-only viewer policy.
+- **Add WAF rules for DDoS protection** — attach AWS WAF to the CloudFront distribution and/or ALB to block common attack patterns and apply rate-based rules.
+- **Enable rate limiting on API Gateway** — if using the serverless architecture, configure usage plans and throttling on API Gateway to prevent abuse of the `/api/v1/tickets` endpoint and its downstream OpenAI API calls.
+
+## Cost optimization
+
+Keep cloud costs proportional to actual usage with these strategies:
+
+- **Use Spot instances for ECS entity-extraction workers** — the async BullMQ workers that perform GraphRAG entity extraction are fault-tolerant and can be interrupted. Running them on ECS Fargate Spot can reduce compute costs by up to 70%.
+- **RDS Reserved Instances for steady-state production workloads** — if the database runs continuously, committing to a 1-year Reserved Instance typically yields 30–40% savings over On-Demand pricing.
+- **CloudFront caching reduces origin requests** — configure cache behaviours to serve the compiled React assets (`/static/*`, `*.js`, `*.css`) from the edge with long TTLs. Only API calls (`/api/*`) should bypass the cache.
+- **Lambda pay-per-use option for low-traffic deployments** — for environments processing fewer than a few thousand tickets per day, the serverless architecture's pay-per-invocation model can be more economical than continuously running ECS Fargate tasks.
+
+## pgvector on RDS
+
+<Note>
+  AWS RDS PostgreSQL **15 and later** supports the `pgvector` extension natively. After provisioning your RDS instance, enable it by running the following command once against the `ticket_system` database:
+
+  ```sql
+  CREATE EXTENSION vector;
+  ```
+
+  You can run this via `psql`, a Prisma migration, or the RDS Query Editor in the AWS Console. The `pgvector` extension powers both the hybrid RAG knowledge-base search and the GraphRAG entity similarity lookups that the backend relies on for AI classification.
+</Note>
+
+## Environment variable mapping
+
+When moving from Docker Compose to ECS, update the following environment variable values in your ECS task definition or Secrets Manager entries:
+
+| Variable | Docker Compose value | AWS value |
+|---|---|---|
+| `DATABASE_URL` | `postgresql://postgres:postgres@postgres:5432/ticket_system` | `postgresql://<user>:<pass>@<rds-endpoint>:5432/ticket_system` |
+| `REDIS_HOST` | `redis` | ElastiCache primary endpoint (e.g. `my-cluster.abc123.ng.0001.use1.cache.amazonaws.com`) |
+| `REDIS_PORT` | `6379` | `6379` |
+| `OPENAI_API_KEY` | Plaintext in `.env` | Injected from AWS Secrets Manager |
+| `NODE_ENV` | `development` | `production` |
+| `PORT` | `3001` | `3001` (matched to ECS container port mapping) |

@@ -1,0 +1,129 @@
+---
+title: "Admin Dashboard for Support Ticket Management"
+sidebarTitle: "Admin Dashboard"
+description: "The admin dashboard shows ticket statistics, lets agents filter by status, close resolved tickets, and reassign AI-resolved tickets back to human review."
+---
+
+The Admin Dashboard is the control center for support agents managing the incoming ticket queue. It provides a live overview of all support tickets in the system — broken down by status — along with per-ticket actions to close resolved issues or escalate AI-handled tickets back to human review. The dashboard fetches tickets from the backend on load and whenever the filter or Refresh button is used, ensuring agents always see the current state of the queue.
+
+The page is built in `src/pages/AdminDashboard.tsx` and uses the `TicketCard` component to render each individual ticket along with its action buttons.
+
+## Accessing the dashboard
+
+<Steps>
+  <Step title="Open the application">
+    Navigate to `http://localhost` in your browser (or `http://localhost:3000` in development mode).
+  </Step>
+  <Step title="Click Admin Dashboard">
+    In the blue top navigation bar, click **Admin Dashboard**. This routes to `/admin`.
+  </Step>
+</Steps>
+
+## Stats overview
+
+At the top of the dashboard, four stat cards provide an at-a-glance summary of the current ticket queue. These counts are computed client-side from the full ticket list returned by the API.
+
+<CardGroup cols={4}>
+  <Card title="Total Tickets" icon="ticket" iconType="solid">
+    **Blue** — The total number of tickets currently loaded, across all statuses. Updates whenever the ticket list is refreshed.
+  </Card>
+  <Card title="AI Resolved" icon="robot" iconType="solid">
+    **Green** — Tickets where the AI handled the response with high confidence. These are either awaiting agent confirmation or can be closed directly.
+  </Card>
+  <Card title="Pending Agent" icon="clock" iconType="solid">
+    **Yellow** — Tickets where the AI confidence score was too low to auto-resolve. These require human review before a reply is sent.
+  </Card>
+  <Card title="Closed" icon="circle-check" iconType="solid">
+    **Gray** — Tickets that have been fully resolved and closed by an agent. No further action is needed.
+  </Card>
+</CardGroup>
+
+## Filtering tickets
+
+The filter bar sits below the stat cards. A dropdown lets agents narrow the ticket list to a specific status, and a **Refresh** button re-fetches from the API on demand.
+
+```typescript
+// AdminDashboard.tsx — filter and fetch logic
+const fetchTickets = useCallback(async () => {
+  setLoading(true);
+  setError(null);
+  try {
+    const params = filter !== 'all' ? filter : undefined;
+    const data = await ticketService.getTickets(params);
+    setTickets(data);
+  } catch (err) {
+    setError('Failed to fetch tickets');
+  } finally {
+    setLoading(false);
+  }
+}, [filter]);
+```
+
+The dropdown options map directly to the filter values passed to `GET /api/v1/tickets?status=<value>`:
+
+| Dropdown option | Query parameter sent |
+|---|---|
+| All | *(no `status` param)* |
+| AI Resolved | `?status=ai_resolved` |
+| Pending Agent | `?status=pending_agent` |
+| Closed | `?status=closed` |
+
+Changing the dropdown immediately triggers a re-fetch via the `useEffect` that watches the `filter` state. Clicking **Refresh** manually calls `fetchTickets()` without changing the current filter.
+
+## Ticket actions
+
+Each ticket rendered by `TicketCard` exposes up to two action buttons, depending on its current status:
+
+### Close ticket
+
+Available on any ticket that is **not** already `closed`. Calls `ticketService.updateTicket` with `{ status: 'closed' }`, which issues a `PATCH` request to the backend, then re-fetches the ticket list.
+
+```typescript
+const handleCloseTicket = async (id: number) => {
+  await ticketService.updateTicket(id, { status: 'closed' });
+  fetchTickets();
+};
+```
+
+This maps to:
+
+```http
+PATCH /api/v1/tickets/:id
+Content-Type: application/json
+
+{ "status": "closed" }
+```
+
+### Reassign to human
+
+Available **only** on tickets with status `ai_resolved`. Moves the ticket back to `pending_agent`, putting it back into the human review queue. Useful when an agent inspects an AI-resolved ticket and disagrees with the AI's handling.
+
+```typescript
+const handleReassignToHuman = async (id: number) => {
+  await ticketService.updateTicket(id, { status: 'pending_agent' });
+  fetchTickets();
+};
+```
+
+## Ticket data structure
+
+Every ticket in the dashboard conforms to the `Ticket` interface defined in `src/types/ticket.ts`:
+
+```typescript
+interface Ticket {
+  id: number;
+  user_description: string;
+  category: string;
+  ai_suggested_response: string;
+  confidence_score: number;
+  status: 'ai_resolved' | 'pending_agent' | 'closed';
+  created_at: string;
+  updated_at: string;
+}
+```
+
+The `confidence_score` is rendered as a percentage inside `TicketCard` with color coding: green for scores `≥ 0.7`, yellow for `≥ 0.5`, and red for anything below. The AI suggested response is truncated to the first 200 characters in the card view to keep the list readable.
+
+<Tip>
+  Agents should review `pending_agent` tickets regularly. These are cases where the AI confidence score fell **below 0.7**, meaning the model was uncertain about the correct category or response. Left unattended, these tickets represent customers who have not yet received a verified reply. Use the **Pending Agent** filter to isolate this queue and prioritize accordingly.
+</Tip>

@@ -1,0 +1,142 @@
+---
+title: "Hybrid RAG Search with pgvector"
+sidebarTitle: "RAG Search"
+description: "The hybrid scoring algorithm combines 80% vector similarity with 20% recency decay and article importance weights to retrieve the most relevant knowledge base articles."
+---
+
+The RAG (Retrieval-Augmented Generation) layer enriches every AI response with content from the knowledge base. Rather than relying on pure semantic similarity, the system uses a **hybrid scoring algorithm** that balances how relevant an article is to the query, how recently it was added, and a manually configurable importance weight — so that critical support articles consistently surface above older or lower-priority content.
+
+## Hybrid scoring formula
+
+Every candidate article retrieved by pgvector is assigned a final hybrid score before the result set is ranked:
+
+```
+finalScore = (vectorSimilarity × 0.8) + (recencyScore × 0.2) × importance
+```
+
+The three components are:
+
+<AccordionGroup>
+  <Accordion title="Vector Similarity (80%)">
+    Computed by pgvector using cosine distance between the query embedding and each article's stored embedding:
+
+    ```sql
+    1 - (embedding <=> query_embedding::vector) AS similarity
+    ```
+
+    A value of `1.0` means identical vectors; `0.0` means orthogonal. The raw cosine similarity is multiplied by **0.8** in the hybrid formula, making semantic relevance the dominant factor.
+  </Accordion>
+
+  <Accordion title="Recency Score (20%)">
+    Newer articles score higher. The score decays linearly from `1.0` to `0.0` over 365 days and is floored at `0.0` for articles older than one year:
+
+    ```typescript
+    const daysSinceCreation = (Date.now() - createdAt.getTime()) / (1000 * 60 * 60 * 24);
+    const recencyScore = Math.max(0, 1 - daysSinceCreation / 365);
+    ```
+
+    The recency score is multiplied by **0.2**, so it can only shift the final ranking for articles that are already semantically close to the query.
+  </Accordion>
+
+  <Accordion title="Importance Weight">
+    A manual float multiplier stored per article in the database. It defaults to `1.0` but can be set anywhere in the range `0.0–2.0`. The importance weight is applied to the entire recency contribution:
+
+    ```typescript
+    return (vectorSimilarity * 0.8) + (recencyScore * 0.2) * importance;
+    ```
+
+    Set critical articles to `importance >= 1.5` to ensure they rank above semantically similar but lower-priority articles, regardless of age.
+  </Accordion>
+</AccordionGroup>
+
+After hybrid scores are calculated, results are sorted in descending score order and the top `limit` articles (default `3`) are returned.
+
+## Knowledge base schema
+
+The `knowledge_base` table is defined in `prisma/schema.prisma`. The `embedding` column uses the `vector(1536)` type provided by the pgvector extension.
+
+```prisma
+model KnowledgeBase {
+  id         Int      @id @default(autoincrement())
+  title      String
+  content    String   @db.Text
+  category   String?
+  embedding  Unsupported("vector(1536)")?
+  importance Float    @default(1.0)
+  created_at DateTime @default(now())
+
+  @@map("knowledge_base")
+}
+```
+
+Articles without an embedding (i.e. where `embedding IS NULL`) are excluded from search results. Always use `addKnowledgeArticle()` rather than inserting rows directly — it generates and stores the embedding automatically.
+
+## KnowledgeArticle interface
+
+The TypeScript interface used throughout `ragService.ts` to represent a retrieved article. The `similarity` and `hybridScore` fields are populated during search; `importance` is read from the database.
+
+```typescript
+interface KnowledgeArticle {
+  id: number;
+  title: string;
+  content: string;
+  category: string;
+  similarity?: number;    // raw pgvector cosine similarity (0.0–1.0)
+  hybridScore?: number;   // final hybrid score after weighting
+  importance?: number;    // manual weight from database (default 1.0)
+  created_at: Date;
+}
+```
+
+## Default knowledge base
+
+On first run, `initializeKnowledgeBase()` seeds the knowledge base with five articles covering the most common support categories. Each article is embedded and stored with the default importance of `1.0`.
+
+| Title | Category |
+|---|---|
+| How to request a refund | Returns |
+| Payment methods accepted | Billing |
+| Track your order | Shipping |
+| Reset your password | Account |
+| Website not loading | Technical |
+
+These seed articles give the RAG system enough coverage to provide relevant context on common tickets immediately, before a support team adds domain-specific content.
+
+## Adding articles programmatically
+
+Use `addKnowledgeArticle()` from `src/services/ragService.ts` to insert new articles. The function generates the embedding from `content` automatically before writing to the database.
+
+```typescript
+addKnowledgeArticle(
+  title: string,
+  content: string,
+  category: string,
+  importance?: number // defaults to 1.0
+): Promise<void>
+```
+
+**Example — adding a high-priority article:**
+
+```typescript
+import { addKnowledgeArticle } from './services/ragService';
+
+await addKnowledgeArticle(
+  'Service outage — 2024-06 payment processor',
+  'We are aware of an ongoing issue with payment processing. No charges will be made during this period. Expected resolution: 2 hours.',
+  'Billing',
+  1.8 // elevated importance so this article surfaces prominently
+);
+```
+
+The raw SQL insert used internally ensures the vector is cast correctly for pgvector:
+
+```typescript
+await prisma.$executeRaw`
+  INSERT INTO knowledge_base (title, content, category, embedding, importance)
+  VALUES (${title}, ${content}, ${category}, ${embedding}::vector, ${importance})
+`;
+```
+
+<Tip>
+  The Knowledge Base Manager UI lets agents adjust importance weights without writing code. Navigate to **Knowledge Base → Articles**, click an article, and drag the importance slider. Changes take effect on the next ticket submission.
+</Tip>
